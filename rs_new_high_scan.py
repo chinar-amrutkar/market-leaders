@@ -134,6 +134,18 @@ def get_screener_universe() -> pd.DataFrame:
 
     universe = pd.concat(frames, ignore_index=True)
     universe["name"] = universe["name"].astype(str).str.upper().str.strip()
+    unexpected_exchanges = sorted(set(universe["exchange"].dropna()) - set(EXCHANGES))
+    if unexpected_exchanges:
+        raise RuntimeError(
+            f"Unexpected exchanges in filtered universe: {unexpected_exchanges}; refusing to publish."
+        )
+    def is_supported_instrument(row: pd.Series) -> bool:
+        if row.get("type") == "dr":
+            return True
+        specs = row.get("typespecs")
+        return row.get("type") == "stock" and isinstance(specs, (list, tuple, set)) and "common" in specs
+    if not universe.apply(is_supported_instrument, axis=1).all():
+        raise RuntimeError("TradingView returned non-common-stock instruments; refusing to publish.")
     universe = universe[universe["name"].map(is_equity_symbol)]
     universe = universe.drop_duplicates(subset=["name"], keep="first").reset_index(drop=True)
     if len(universe) < 500:
@@ -144,7 +156,7 @@ def get_screener_universe() -> pd.DataFrame:
 
 def is_equity_symbol(symbol: str) -> bool:
     """Reject malformed symbols; instrument type filtering excludes funds/preferreds."""
-    return bool(re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,9}", str(symbol).upper().strip()))
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", str(symbol).upper().strip()))
 
 
 def yahoo_symbol(symbol: str) -> str:
