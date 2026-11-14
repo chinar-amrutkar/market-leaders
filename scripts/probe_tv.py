@@ -16,3 +16,5 @@ q = (Query().set_markets("america")
      .select("name", "close", "time", "close|1D[0]", "close|1D[1]", "time|1D[0]")
      .where(col("name") == "AAPL", col("exchange") == "NASDAQ").limit(1))
 print("HISTORY_FIELDS", q.get_scanner_data_raw(), flush=True)
+
+print('ADR probe rerun')
