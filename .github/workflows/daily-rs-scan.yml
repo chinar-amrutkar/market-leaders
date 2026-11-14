@@ -2,9 +2,15 @@ name: Daily RS new-high scan
 
 on:
   schedule:
-    # 00:40 UTC weekdays; uses completed daily candles.
     - cron: "40 0 * * 1-5"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "rs_new_high_scan.py"
+      - "requirements.txt"
+      - "tests/**"
+      - ".github/workflows/daily-rs-scan.yml"
 
 permissions:
   contents: write
@@ -28,7 +34,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt pytest
+
+      - name: Run regression tests
+        run: python -m pytest -q
 
       - name: Run RS scan
         run: python -u rs_new_high_scan.py
