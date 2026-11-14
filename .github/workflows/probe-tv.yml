@@ -5,6 +5,7 @@ on:
     branches: [main, master]
     paths:
       - "scripts/probe_yahoo.py"
+      - "scripts/probe_tv.py"
   workflow_dispatch:
 
 permissions:
