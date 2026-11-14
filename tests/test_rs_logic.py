@@ -1,37 +1,60 @@
-from datetime import date, timedelta
-
 import pandas as pd
 
-LOOKBACK = 250
-RECENCY = 10
+from rs_new_high_scan import LOOKBACK, RECENCY, calculate_signals
 
 
-def recent_breakouts(rs: pd.Series) -> list[int]:
-    signals = []
-    for i in range(LOOKBACK, len(rs)):
-        if rs.iloc[i] > rs.iloc[i - LOOKBACK:i].max():
-            signals.append(i)
-    return [i for i in signals if i >= len(rs) - RECENCY]
+def _universe(symbol="TEST"):
+    return pd.DataFrame([{
+        "name": symbol,
+        "description": "Test company",
+        "exchange": "NASDAQ",
+    }])
 
 
-def test_flat_series_has_no_breakout():
-    rs = pd.Series([1.0] * (LOOKBACK + RECENCY))
-    assert recent_breakouts(rs) == []
+def test_recent_rs_breakout_is_detected_on_aligned_dates():
+    dates = pd.bdate_range("2025-01-01", periods=LOOKBACK + RECENCY)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+    stock.iloc[-1] = 101.0
 
+    result = calculate_signals(_universe(), {"TEST": stock}, spy)
 
-def test_recent_breakout_is_included():
-    rs = pd.Series([1.0] * (LOOKBACK + RECENCY))
-    rs.iloc[-3] = 1.01
-    assert recent_breakouts(rs) == [len(rs) - 3]
+    assert result["symbol"].tolist() == ["TEST"]
+    assert result.iloc[0]["sessions_ago"] == 0
+    assert result.iloc[0]["breakout_date"] == dates[-1].strftime("%Y-%m-%d")
+    assert abs(result.iloc[0]["breakout_pct"] - 1.0) < 1e-9
 
 
 def test_breakout_older_than_ten_sessions_is_excluded():
-    rs = pd.Series([1.0] * (LOOKBACK + RECENCY + 1))
-    rs.iloc[-RECENCY - 1] = 1.01
-    assert recent_breakouts(rs) == []
+    dates = pd.bdate_range("2025-01-01", periods=LOOKBACK + RECENCY + 1)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+    stock.iloc[-RECENCY - 1] = 101.0
+
+    result = calculate_signals(_universe(), {"TEST": stock}, spy)
+
+    assert result.empty
 
 
-def test_current_bar_is_excluded_from_lookback():
-    rs = pd.Series([1.0] * (LOOKBACK + RECENCY))
-    rs.iloc[-1] = 1.02
-    assert rs.iloc[-1] > rs.iloc[-1 - LOOKBACK:-1].max()
+def test_missing_stock_session_is_not_positionally_paired_to_spy():
+    dates = pd.bdate_range("2025-01-01", periods=LOOKBACK + RECENCY + 1)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+    stock.iloc[20] = float("nan")
+    stock.iloc[-1] = 110.0
+
+    result = calculate_signals(_universe(), {"TEST": stock}, spy)
+
+    # The missing bar remains a gap on the SPY session index. Since the
+    # preceding 250-session window is incomplete, no breakout is fabricated.
+    assert result.empty
+
+
+def test_flat_relative_strength_has_no_breakout():
+    dates = pd.bdate_range("2025-01-01", periods=LOOKBACK + RECENCY)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+
+    result = calculate_signals(_universe(), {"TEST": stock}, spy)
+
+    assert result.empty
