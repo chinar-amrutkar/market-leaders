@@ -18,7 +18,11 @@ A breakout occurs when a session's RS is strictly greater than the maximum RS ov
 
 TradingView's screener endpoint does not return historical values for the `close|1D[n]` / `time|1D[n]` fields used in the first implementation. The scanner therefore uses TradingView only for the instrument universe and retrieves dated daily bars from Yahoo Finance. Every stock series is reindexed to SPY's exact US trading-session dates before calculating RS. Missing stock sessions remain missing; they are never paired positionally with another date.
 
-The universe excludes ETFs/funds, OTC listings, preferreds, warrants, units, rights and other non-common-equity instruments. The scanner validates the returned exchange and instrument types and fails rather than publishing an incorrectly filtered universe.
+The universe excludes ETFs/funds, OTC listings, preferreds, warrants, units, rights and other non-common-equity instruments. Biotech companies are included; the scanner tracks relative strength across sectors rather than applying a sector exclusion. The scanner validates the returned exchange and instrument types and fails rather than publishing an incorrectly filtered universe.
+
+## Price and liquidity eligibility
+
+The scan requires a share price above $10, 30-day average dollar volume above $30 million (30-day SMA multiplied by 30-day average share volume), 10-day average share volume above 350,000 shares, and 14-period ADR% above 4%. These filters are applied uniformly, including to biotech stocks.
 
 ## Outputs
 
