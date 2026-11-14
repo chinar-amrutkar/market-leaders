@@ -9,6 +9,7 @@ calendar dates before relative strength is calculated.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -406,11 +407,38 @@ def main() -> int:
     details_path = OUT / "rs_new_high_details.csv"
     hits[["symbol"]].to_csv(tickers_path, index=False)
     hits.to_csv(details_path, index=False)
+
+    # Keep an immutable-by-date snapshot of each completed trading session.
+    # Re-running a scan for the same session refreshes that session's snapshot.
+    history_dir = OUT / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    session_dates = [date.strftime("%Y-%m-%d") for date in spy.index[-RECENCY:]]
+    snapshot_date = session_dates[-1]
+    dated_details = history_dir / f"rs_new_high_details_{snapshot_date}.csv"
+    dated_tickers = history_dir / f"rs_new_high_tickers_{snapshot_date}.csv"
+    hits.to_csv(dated_details, index=False)
+    hits[["symbol"]].to_csv(dated_tickers, index=False)
+
+    available_dates = sorted(
+        path.name.removeprefix("rs_new_high_details_").removesuffix(".csv")
+        for path in history_dir.glob("rs_new_high_details_????-??-??.csv")
+    )
+    manifest = {
+        "latest_date": snapshot_date,
+        "dates": available_dates,
+        "sessions": session_dates,
+        "details_pattern": "rs_new_high_details_{date}.csv",
+        "tickers_pattern": "rs_new_high_tickers_{date}.csv",
+    }
+    (history_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
     LOG.info(
         "Completed. Universe=%s; histories=%s; qualifying tickers=%s; last SPY session=%s",
-        len(universe), len(histories), len(hits), spy.index[-1].date(),
+        len(universe), len(histories), len(hits), snapshot_date,
     )
-    LOG.info("Wrote %s and %s", tickers_path, details_path)
+    LOG.info("Wrote current outputs plus dated snapshot %s", dated_details)
     return 0
 
 
