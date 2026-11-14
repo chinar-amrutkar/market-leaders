@@ -36,8 +36,8 @@ MIN_AVG_DOLLAR_VOLUME_30D = 30_000_000.0
 MIN_ADR_PCT = 4.0
 MIN_AVG_VOLUME_10D = 350_000
 DETAIL_COLUMNS = [
-    "symbol", "description", "exchange", "breakout_date", "sessions_ago",
-    "close", "adr_pct", "average_volume_10d", "average_dollar_volume_30d",
+    "symbol", "description", "exchange", "sector", "float_shares_outstanding",
+    "breakout_date", "sessions_ago", "close", "adr_pct", "average_volume_10d", "average_dollar_volume_30d",
     "rs_ratio", "prior_250d_rs_high", "breakout_pct",
 ]
 
@@ -74,8 +74,8 @@ def _universe_query(exchange: str, instrument_type: str, offset: int) -> Query:
     return (
         Query().set_markets("america")
         .select(
-            "name", "description", "exchange", "type", "typespecs", "industry",
-            "close", "SMA30", "ADRP", "average_volume_10d_calc",
+            "name", "description", "exchange", "type", "typespecs", "sector", "industry",
+            "float_shares_outstanding", "close", "SMA30", "ADRP", "average_volume_10d_calc",
             "average_volume_30d_calc",
         )
         .where(*conditions)
@@ -373,6 +373,8 @@ def calculate_signals(
             "symbol": symbol,
             "description": str(meta.get("description", "")),
             "exchange": str(meta.get("exchange", "")),
+            "sector": str(meta.get("sector", "") or ""),
+            "float_shares_outstanding": float(meta.get("float_shares_outstanding", float("nan"))),
             "breakout_date": breakout_date.strftime("%Y-%m-%d"),
             "close": float(meta.get("close", float("nan"))),
             "adr_pct": float(meta.get("ADRP", float("nan"))),
