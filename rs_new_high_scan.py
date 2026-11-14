@@ -58,22 +58,23 @@ def _query_with_retry(query: Query, label: str) -> tuple[int, pd.DataFrame]:
 
 
 def _universe_query(exchange: str, instrument_type: str, offset: int) -> Query:
-    query = (
+    # Query.where() replaces the filter list; pass every condition in one call.
+    conditions = [
+        col("exchange") == exchange,
+        col("close") > 0,
+        col("type") == instrument_type,
+    ]
+    if instrument_type == "stock":
+        conditions.append(col("typespecs").has(["common"]))
+    return (
         Query().set_markets("america")
         .select("name", "description", "exchange", "type", "typespecs")
-        .where(
-            col("exchange") == exchange,
-            col("close") > 0,
-            col("type") == instrument_type,
-        )
+        .where(*conditions)
         .order_by("name")
         .offset(offset)
         # The library's range is [start, end], not [start, row_count].
         .limit(offset + PAGE_SIZE)
     )
-    if instrument_type == "stock":
-        query = query.where(col("typespecs").has(["common"]))
-    return query
 
 
 def get_screener_universe() -> pd.DataFrame:
