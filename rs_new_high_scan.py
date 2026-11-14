@@ -164,7 +164,7 @@ def get_screener_universe() -> pd.DataFrame:
         )
     LOG.info(
         "Price/liquidity-qualified common stocks and depositary receipts: %s "
-        "(price > $%.2f; 30d avg dollar volume > $%.0f; 10d avg volume > %s; ADRP > %.1f%%; biotech excluded)",
+        "(price > $%.2f; 30d avg dollar volume > $%.0f; 10d avg volume > %s; ADRP > %.1f%%; biotech included)",
         len(universe), MIN_PRICE, MIN_AVG_DOLLAR_VOLUME_30D,
         MIN_AVG_VOLUME_10D, MIN_ADR_PCT,
     )
@@ -175,7 +175,7 @@ def apply_liquidity_filters(universe: pd.DataFrame) -> pd.DataFrame:
     """Apply the NEL liquidity thresholds plus the requested $10 share-price floor."""
     required = [
         "close", "SMA30", "ADRP", "average_volume_10d_calc",
-        "average_volume_30d_calc", "industry",
+        "average_volume_30d_calc",
     ]
     missing = sorted(set(required) - set(universe.columns))
     if missing:
@@ -195,12 +195,8 @@ def apply_liquidity_filters(universe: pd.DataFrame) -> pd.DataFrame:
     frame["average_dollar_volume_30d"] = (
         frame["SMA30"] * frame["average_volume_30d_calc"]
     )
-    not_biotech = ~frame["industry"].fillna("").astype(str).str.contains(
-        "biotech", case=False, regex=False
-    )
     eligible = (
-        not_biotech
-        & (frame["close"] > MIN_PRICE)
+        (frame["close"] > MIN_PRICE)
         & (frame["SMA30"] > 0)
         & (frame["ADRP"] > MIN_ADR_PCT)
         & (frame["average_volume_10d_calc"] > MIN_AVG_VOLUME_10D)
