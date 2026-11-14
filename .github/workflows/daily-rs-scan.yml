@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: daily-rs-new-high-scan
@@ -60,3 +62,36 @@ jobs:
           name: rs-new-high-csvs
           path: outputs/rs_new_high_*.csv
           retention-days: 30
+
+  deploy:
+    needs: scan
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out latest main (including the newly committed CSVs)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Prepare site
+        run: |
+          mkdir -p site/outputs
+          cp index.html site/index.html
+          cp outputs/rs_new_high_details.csv site/outputs/
+          cp outputs/rs_new_high_tickers.csv site/outputs/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
