@@ -31,8 +31,13 @@ YAHOO_BATCH_SIZE = 300
 YAHOO_THREADS = 8
 MIN_HISTORY_COVERAGE = 0.70
 OUT = Path("outputs")
+MIN_PRICE = 10.0
+MIN_AVG_DOLLAR_VOLUME_30D = 30_000_000.0
+MIN_ADR_PCT = 4.0
+MIN_AVG_VOLUME_10D = 350_000
 DETAIL_COLUMNS = [
     "symbol", "description", "exchange", "breakout_date", "sessions_ago",
+    "close", "adr_pct", "average_volume_10d", "average_dollar_volume_30d",
     "rs_ratio", "prior_250d_rs_high", "breakout_pct",
 ]
 
@@ -68,7 +73,11 @@ def _universe_query(exchange: str, instrument_type: str, offset: int) -> Query:
         conditions.append(col("typespecs").has(["common"]))
     return (
         Query().set_markets("america")
-        .select("name", "description", "exchange", "type", "typespecs")
+        .select(
+            "name", "description", "exchange", "type", "typespecs", "industry",
+            "close", "SMA30", "ADRP", "average_volume_10d_calc",
+            "average_volume_30d_calc",
+        )
         .where(*conditions)
         .order_by("name")
         .offset(offset)
@@ -148,10 +157,56 @@ def get_screener_universe() -> pd.DataFrame:
         raise RuntimeError("TradingView returned non-common-stock instruments; refusing to publish.")
     universe = universe[universe["name"].map(is_equity_symbol)]
     universe = universe.drop_duplicates(subset=["name"], keep="first").reset_index(drop=True)
-    if len(universe) < 500:
-        raise RuntimeError(f"Unexpectedly small eligible universe ({len(universe)}); refusing to publish.")
-    LOG.info("Eligible common stocks and depositary receipts: %s", len(universe))
+    universe = apply_liquidity_filters(universe)
+    if len(universe) < 300:
+        raise RuntimeError(
+            f"Unexpectedly small price/liquidity-qualified universe ({len(universe)}); refusing to publish."
+        )
+    LOG.info(
+        "Price/liquidity-qualified common stocks and depositary receipts: %s "
+        "(price > $%.2f; 30d avg dollar volume > $%.0f; 10d avg volume > %s; ADRP > %.1f%%; biotech excluded)",
+        len(universe), MIN_PRICE, MIN_AVG_DOLLAR_VOLUME_30D,
+        MIN_AVG_VOLUME_10D, MIN_ADR_PCT,
+    )
     return universe
+
+
+def apply_liquidity_filters(universe: pd.DataFrame) -> pd.DataFrame:
+    """Apply the NEL liquidity thresholds plus the requested $10 share-price floor."""
+    required = [
+        "close", "SMA30", "ADRP", "average_volume_10d_calc",
+        "average_volume_30d_calc", "industry",
+    ]
+    missing = sorted(set(required) - set(universe.columns))
+    if missing:
+        raise RuntimeError(
+            "TradingView did not return required price/liquidity field(s): "
+            + ", ".join(missing)
+        )
+
+    frame = universe.copy()
+    numeric = [
+        "close", "SMA30", "ADRP", "average_volume_10d_calc",
+        "average_volume_30d_calc",
+    ]
+    for column in numeric:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    frame["average_dollar_volume_30d"] = (
+        frame["SMA30"] * frame["average_volume_30d_calc"]
+    )
+    not_biotech = ~frame["industry"].fillna("").astype(str).str.contains(
+        "biotech", case=False, regex=False
+    )
+    eligible = (
+        not_biotech
+        & (frame["close"] > MIN_PRICE)
+        & (frame["SMA30"] > 0)
+        & (frame["ADRP"] > MIN_ADR_PCT)
+        & (frame["average_volume_10d_calc"] > MIN_AVG_VOLUME_10D)
+        & (frame["average_dollar_volume_30d"] > MIN_AVG_DOLLAR_VOLUME_30D)
+    )
+    return frame.loc[eligible].reset_index(drop=True)
 
 
 def is_equity_symbol(symbol: str) -> bool:
@@ -323,6 +378,10 @@ def calculate_signals(
             "description": str(meta.get("description", "")),
             "exchange": str(meta.get("exchange", "")),
             "breakout_date": breakout_date.strftime("%Y-%m-%d"),
+            "close": float(meta.get("close", float("nan"))),
+            "adr_pct": float(meta.get("ADRP", float("nan"))),
+            "average_volume_10d": float(meta.get("average_volume_10d_calc", float("nan"))),
+            "average_dollar_volume_30d": float(meta.get("average_dollar_volume_30d", float("nan"))),
             "sessions_ago": len(spy) - 1 - latest_position,
             "rs_ratio": latest_rs,
             "prior_250d_rs_high": previous_high,
