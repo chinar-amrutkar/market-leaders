@@ -23,3 +23,5 @@ for ticker in symbols:
     except Exception:
         pass
 print("COVERAGE", len(found), "/", len(symbols), "SAMPLE", found[:10], flush=True)
+
+print('Retest with TradingView installed.')
