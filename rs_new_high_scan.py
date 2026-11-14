@@ -1,211 +1,326 @@
 #!/usr/bin/env python3
-"""Scan US common stocks/ADRs for recent 250-session RS highs vs SPY.
+"""Scan US common stocks and depositary receipts for recent 250-session RS highs vs SPY.
 
-RS_t = stock close_t / SPY close_t.
-A signal on date t requires RS_t > max(RS[t-250:t]), excluding t.
-The output includes symbols with >=1 signal in the latest 10 completed sessions.
+TradingView's public screener is used to discover the eligible universe. Daily
+OHLC history comes from Yahoo Finance via yfinance because TradingView's
+screener endpoint does not return historical close/time values for the
+requested close|1D[n] fields. All stock prices are joined to SPY on exact
+calendar dates before relative strength is calculated.
 """
 from __future__ import annotations
 
 import logging
+import math
 import re
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import yfinance as yf
 from tradingview_screener import Query, col
 
 LOG = logging.getLogger("rs_scan")
 EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 LOOKBACK = 250
 RECENCY = 10
-MIN_HISTORY = LOOKBACK + RECENCY + 5
+MIN_HISTORY = LOOKBACK + RECENCY
 PAGE_SIZE = 1000
 MAX_PAGES = 20
+YAHOO_BATCH_SIZE = 300
+YAHOO_THREADS = 8
+MIN_HISTORY_COVERAGE = 0.70
 OUT = Path("outputs")
+DETAIL_COLUMNS = [
+    "symbol", "description", "exchange", "breakout_date", "sessions_ago",
+    "rs_ratio", "prior_250d_rs_high", "breakout_pct",
+]
+
+
+def _query_with_retry(query: Query, label: str) -> tuple[int, pd.DataFrame]:
+    """Call TradingView with bounded retries; reject malformed/empty responses."""
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            count, frame = query.get_scanner_data()
+            if frame is None:
+                raise RuntimeError("TradingView returned a null data frame")
+            return int(count), frame
+        except Exception as exc:
+            last_error = exc
+            if attempt == 3:
+                break
+            delay = 2 ** attempt
+            LOG.warning("%s failed (attempt %s/3): %s; retrying in %ss",
+                        label, attempt, exc, delay)
+            time.sleep(delay)
+    raise RuntimeError(f"{label} failed after 3 attempts: {last_error}") from last_error
+
+
+def _universe_query(exchange: str, instrument_type: str, offset: int) -> Query:
+    query = (
+        Query().set_markets("america")
+        .select("name", "description", "exchange", "type", "typespecs")
+        .where(
+            col("exchange") == exchange,
+            col("close") > 0,
+            col("type") == instrument_type,
+        )
+        .order_by("name")
+        .offset(offset)
+        # The library's range is [start, end], not [start, row_count].
+        .limit(offset + PAGE_SIZE)
+    )
+    if instrument_type == "stock":
+        query = query.where(col("typespecs").has(["common"]))
+    return query
 
 
 def get_screener_universe() -> pd.DataFrame:
-    """Retrieve all available common-stock instruments using offset pagination."""
+    """Retrieve common shares and depositary receipts from the US exchanges."""
     frames: list[pd.DataFrame] = []
-    seen: set[str] = set()
     for exchange in EXCHANGES:
-        offset = 0
-        for page in range(MAX_PAGES):
-            query = (
-                Query()
-                .set_markets("america")
-                .select("name", "description", "exchange", "type", "subtype", "close")
-                .where(
-                    col("type") == "stock",
-                    col("exchange") == exchange,
-                    col("close") > 0,
+        for instrument_type in ("stock", "dr"):
+            offset = 0
+            total_count: int | None = None
+            page = 0
+            while page < MAX_PAGES:
+                query = _universe_query(exchange, instrument_type, offset)
+                count, frame = _query_with_retry(
+                    query, f"{exchange}/{instrument_type} page {page + 1}"
                 )
-                .order_by("name")
-                .offset(offset)
-                .limit(PAGE_SIZE)
-            )
-            count, frame = query.get_scanner_data()
-            if frame is None or frame.empty:
-                break
-            frame = frame.reset_index(drop=True)
-            symbol_col = "name" if "name" in frame.columns else frame.columns[0]
-            symbols = frame[symbol_col].astype(str).str.upper().str.strip()
-            fresh = ~symbols.isin(seen)
-            frame = frame.loc[fresh].copy()
-            symbols = symbols.loc[fresh]
-            if frame.empty:
-                break
-            seen.update(symbols.tolist())
-            frames.append(frame)
-            LOG.info("%s page %s: retrieved %s symbols (reported count=%s)", exchange, page + 1, len(frame), count)
-            if len(frame) < PAGE_SIZE:
-                break
-            offset += PAGE_SIZE
-            time.sleep(0.25)
-        else:
-            raise RuntimeError(f"Reached pagination safety limit for {exchange}; refusing incomplete universe.")
+                if total_count is None:
+                    total_count = count
+                    LOG.info("%s %s instruments reported by TradingView: %s",
+                             exchange, instrument_type, total_count)
+                if frame.empty:
+                    if offset < (total_count or 0):
+                        raise RuntimeError(
+                            f"Incomplete TradingView pagination for {exchange}/{instrument_type}: "
+                            f"received no rows at offset {offset} of {total_count}."
+                        )
+                    break
+
+                frame = frame.reset_index(drop=True)
+                if "name" not in frame.columns or "exchange" not in frame.columns:
+                    raise RuntimeError(
+                        f"Unexpected TradingView columns for {exchange}/{instrument_type}: "
+                        f"{list(frame.columns)}"
+                    )
+                frames.append(frame)
+                received = len(frame)
+                offset += received
+                page += 1
+                LOG.info("%s %s page %s: %s rows (%s/%s)",
+                         exchange, instrument_type, page, received,
+                         offset, total_count)
+                if offset >= (total_count or 0):
+                    break
+                if received < PAGE_SIZE:
+                    raise RuntimeError(
+                        f"Short TradingView page for {exchange}/{instrument_type}: "
+                        f"{received} rows at offset {offset - received}, "
+                        f"but totalCount is {total_count}."
+                    )
+            if page >= MAX_PAGES and offset < (total_count or 0):
+                raise RuntimeError(
+                    f"Reached pagination safety limit for {exchange}/{instrument_type}; "
+                    "refusing to scan an incomplete universe."
+                )
+
     if not frames:
-        raise RuntimeError("TradingView returned no US stock symbols.")
-    universe = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["name"])
+        raise RuntimeError("TradingView returned no US common stocks or depositary receipts.")
+
+    universe = pd.concat(frames, ignore_index=True)
+    universe["name"] = universe["name"].astype(str).str.upper().str.strip()
     universe = universe[universe["name"].map(is_equity_symbol)]
-    if len(universe) < 1000:
-        raise RuntimeError(f"Unexpectedly small universe ({len(universe)}); refusing to publish.")
-    LOG.info("Eligible screener symbols after type/symbol filters: %s", len(universe))
+    universe = universe.drop_duplicates(subset=["name"], keep="first").reset_index(drop=True)
+    if len(universe) < 500:
+        raise RuntimeError(f"Unexpectedly small eligible universe ({len(universe)}); refusing to publish.")
+    LOG.info("Eligible common stocks and depositary receipts: %s", len(universe))
     return universe
 
 
 def is_equity_symbol(symbol: str) -> bool:
-    """Conservative symbol-level exclusion for non-common-equity instruments."""
-    s = str(symbol).upper().strip()
-    if not re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,9}", s):
-        return False
-    # TradingView type=stock already excludes funds. Filter common ETF/fund
-    # class patterns and common non-common-equity suffixes as a second guard.
-    excluded_suffixes = ("-P", ".PR", "-W", ".WS", "-U", ".UN", "-R")
-    if s.endswith(excluded_suffixes):
-        return False
-    return True
+    """Reject malformed symbols; instrument type filtering excludes funds/preferreds."""
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9.\\-]{0,9}", str(symbol).upper().strip()))
 
 
-def _fetch_daily(symbols: list[str], exchange: str) -> dict[str, pd.DataFrame]:
-    """Download daily history in bounded batches from TradingView screener columns."""
-    # The screener's 1D historical fields allow batching multiple symbols.
-    # Historical close fields are selected directly from TradingView.
-    from tradingview_screener import Query, col
+def yahoo_symbol(symbol: str) -> str:
+    """Translate TradingView class-share dots to Yahoo Finance hyphen notation."""
+    return str(symbol).upper().strip().replace(".", "-")
 
-    out: dict[str, pd.DataFrame] = {}
-    fields = ["name"] + [f"close|1D[{i}]" for i in range(LOOKBACK + RECENCY + 2)]
-    for start in range(0, len(symbols), 50):
-        batch = symbols[start:start + 50]
-        for symbol in batch:
-            q = (
-                Query().set_markets("america")
-                .select("name", *[f"close|1D[{i}]" for i in range(LOOKBACK + RECENCY + 2)])
-                .where(col("name") == symbol, col("exchange") == exchange, col("type") == "stock")
-                .limit(1)
+
+def _normalise_daily_series(series: pd.Series) -> pd.Series:
+    result = pd.to_numeric(series, errors="coerce").dropna().copy()
+    index = pd.DatetimeIndex(pd.to_datetime(result.index))
+    if index.tz is not None:
+        index = index.tz_convert(None)
+    result.index = index.normalize()
+    result = result[~result.index.duplicated(keep="last")].sort_index()
+    result.name = "close"
+    return result
+
+
+def _extract_close(data: pd.DataFrame, ticker: str) -> pd.Series:
+    """Extract one ticker's Close series from yfinance's single/multi-ticker shapes."""
+    if data is None or data.empty:
+        return pd.Series(dtype="float64")
+    if isinstance(data.columns, pd.MultiIndex):
+        level0 = data.columns.get_level_values(0)
+        level1 = data.columns.get_level_values(1)
+        if ticker in level0:
+            series = data[ticker]["Close"]
+        elif "Close" in level0 and ticker in level1:
+            series = data["Close"][ticker]
+        else:
+            return pd.Series(dtype="float64")
+    else:
+        if "Close" not in data.columns:
+            return pd.Series(dtype="float64")
+        series = data["Close"]
+    return _normalise_daily_series(series)
+
+
+def _download_yahoo_batch(symbols: list[str], batch_number: int) -> pd.DataFrame:
+    """Download a batch with one retry for transient Yahoo failures."""
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            frame = yf.download(
+                tickers=symbols,
+                period="2y",
+                interval="1d",
+                auto_adjust=False,
+                actions=False,
+                group_by="ticker",
+                threads=YAHOO_THREADS,
+                progress=False,
+                timeout=30,
             )
-            try:
-                _, frame = q.get_scanner_data()
-                if frame is not None and not frame.empty:
-                    row = frame.iloc[0]
-                    values = []
-                    for i in range(LOOKBACK + RECENCY + 2):
-                        value = pd.to_numeric(row.get(f"close|1D[{i}]"), errors="coerce")
-                        values.append(float(value) if pd.notna(value) else float("nan"))
-                    series = pd.Series(values, dtype="float64").dropna()
-                    if len(series) >= MIN_HISTORY:
-                        # TradingView history offsets are newest-first; flip to chronological.
-                        out[symbol] = pd.DataFrame({"close": series.iloc[::-1].to_numpy()})
-            except Exception as exc:
-                LOG.warning("History fetch failed for %s: %s", symbol, exc)
-        LOG.info("Historical close coverage: %s/%s", len(out), len(symbols))
-        time.sleep(0.25)
-    return out
+            if frame is not None and not frame.empty:
+                return frame
+            last_error = RuntimeError("Yahoo Finance returned an empty batch")
+        except Exception as exc:
+            last_error = exc
+        if attempt < 3:
+            delay = 2 ** attempt
+            LOG.warning("Yahoo batch %s failed (attempt %s/3): %s; retrying in %ss",
+                        batch_number, attempt, last_error, delay)
+            time.sleep(delay)
+    LOG.error("Yahoo batch %s failed after retries: %s", batch_number, last_error)
+    return pd.DataFrame()
 
 
-def fetch_histories(universe: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Fetch each listing history; grouped by exchange to preserve venue identity."""
-    results: dict[str, pd.DataFrame] = {}
-    for exchange in EXCHANGES:
-        symbols = universe.loc[universe["exchange"] == exchange, "name"].astype(str).tolist()
-        LOG.info("Fetching daily history for %s symbols on %s", len(symbols), exchange)
-        results.update(_fetch_daily(symbols, exchange))
-    coverage = len(results) / max(1, len(universe))
-    LOG.info("Historical coverage %.1f%% (%s/%s)", coverage * 100, len(results), len(universe))
-    # Strict enough to catch an API schema break, but allows legitimate short-history/newly listed stocks.
-    if coverage < 0.90:
-        raise RuntimeError(f"Historical data coverage only {coverage:.1%}; refusing to publish incomplete results.")
-    return results
+def fetch_histories(universe: pd.DataFrame) -> dict[str, pd.Series]:
+    """Fetch two years of daily closes in batches and retain date-indexed histories."""
+    tv_to_yahoo = {
+        row["name"]: yahoo_symbol(row["name"])
+        for _, row in universe.iterrows()
+    }
+    yahoo_symbols = list(dict.fromkeys(tv_to_yahoo.values()))
+    histories: dict[str, pd.Series] = {}
+    total_batches = math.ceil(len(yahoo_symbols) / YAHOO_BATCH_SIZE)
+
+    for batch_idx, start in enumerate(range(0, len(yahoo_symbols), YAHOO_BATCH_SIZE), start=1):
+        batch = yahoo_symbols[start:start + YAHOO_BATCH_SIZE]
+        LOG.info("Downloading Yahoo daily history batch %s/%s (%s symbols)",
+                 batch_idx, total_batches, len(batch))
+        data = _download_yahoo_batch(batch, batch_idx)
+        batch_found = 0
+        for tv_symbol, yf_symbol in tv_to_yahoo.items():
+            if yf_symbol not in batch:
+                continue
+            close = _extract_close(data, yf_symbol)
+            if len(close) >= MIN_HISTORY:
+                histories[tv_symbol] = close
+                batch_found += 1
+        LOG.info("Yahoo history coverage after batch %s: %s/%s symbols",
+                 batch_idx, len(histories), len(universe))
+        # Short pause reduces the chance of upstream throttling between batches.
+        time.sleep(0.5)
+
+    coverage = len(histories) / max(1, len(universe))
+    LOG.info("Yahoo history coverage: %.1f%% (%s/%s)",
+             coverage * 100, len(histories), len(universe))
+    if coverage < MIN_HISTORY_COVERAGE:
+        raise RuntimeError(
+            f"Yahoo daily history coverage only {coverage:.1%}; "
+            f"minimum required is {MIN_HISTORY_COVERAGE:.0%}. Refusing to publish."
+        )
+    return histories
 
 
 def fetch_spy_history() -> pd.Series:
-    from tradingview_screener import Query, col
-    query = (
-        Query().set_markets("america")
-        .select("name", *[f"close|1D[{i}]" for i in range(MIN_HISTORY)])
-        .where(col("name") == "SPY", col("exchange") == "AMEX", col("type") == "fund")
-        .limit(1)
+    """Fetch SPY daily closes, which provide the canonical US trading-session index."""
+    data = yf.download(
+        tickers="SPY",
+        period="2y",
+        interval="1d",
+        auto_adjust=False,
+        actions=False,
+        progress=False,
+        threads=False,
+        timeout=30,
     )
-    _, frame = query.get_scanner_data()
-    if frame is None or frame.empty:
-        # Some TradingView market mappings expose SPY on ARCA.
-        query = Query().set_markets("america").select(
-            "name", *[f"close|1D[{i}]" for i in range(MIN_HISTORY)]
-        ).where(col("name") == "SPY").limit(1)
-        _, frame = query.get_scanner_data()
-    if frame is None or frame.empty:
-        raise RuntimeError("Could not retrieve SPY daily history.")
-    row = frame.iloc[0]
-    vals = [pd.to_numeric(row.get(f"close|1D[{i}]"), errors="coerce") for i in range(MIN_HISTORY)]
-    series = pd.Series(vals, dtype="float64").dropna().iloc[::-1]
-    if len(series) < MIN_HISTORY:
-        raise RuntimeError(f"SPY history incomplete: {len(series)} bars, expected {MIN_HISTORY}.")
-    return series.reset_index(drop=True)
+    spy = _extract_close(data, "SPY")
+    if len(spy) < MIN_HISTORY:
+        raise RuntimeError(f"SPY history incomplete: {len(spy)} bars, expected at least {MIN_HISTORY}.")
+    # Scheduled scans run at 00:40 UTC. If manually run before 22:00 UTC,
+    # discard today's potentially incomplete daily candle.
+    now = datetime.now(timezone.utc)
+    cutoff = pd.Timestamp(now.date() if now.hour >= 22 else (now.date() - pd.Timedelta(days=1)))
+    spy = spy.loc[spy.index <= cutoff]
+    if len(spy) < MIN_HISTORY:
+        raise RuntimeError(f"SPY completed daily history incomplete after cutoff: {len(spy)} bars.")
+    return spy
 
 
-def calculate_signals(universe: pd.DataFrame, histories: dict[str, pd.DataFrame], spy: pd.Series) -> pd.DataFrame:
-    records = []
-    # The screener exposes historical close values but not necessarily a common
-    # timestamp array. Use the same latest N completed daily sessions for all symbols.
-    spy = spy.iloc[-MIN_HISTORY:].reset_index(drop=True)
-    for symbol, history in histories.items():
-        stock = history["close"].iloc[-MIN_HISTORY:].reset_index(drop=True)
-        if len(stock) != len(spy):
-            continue
+def calculate_signals(
+    universe: pd.DataFrame,
+    histories: dict[str, pd.Series],
+    spy: pd.Series,
+) -> pd.DataFrame:
+    """Calculate RS highs on SPY sessions; missing stock sessions stay missing."""
+    spy = _normalise_daily_series(spy)
+    records: list[dict] = []
+    for symbol, stock_close in histories.items():
+        # Reindex to SPY's exact session dates. Missing bars remain NaN; they are
+        # never positionally paired with a different day's SPY close.
+        stock = _normalise_daily_series(stock_close).reindex(spy.index)
         ratio = stock / spy
-        if not ratio.notna().all():
+        prior_high = ratio.shift(1).rolling(LOOKBACK, min_periods=LOOKBACK).max()
+        is_breakout = ratio.gt(prior_high)
+        recent = is_breakout.iloc[-RECENCY:]
+        hit_positions = [i for i, hit in enumerate(recent.tolist()) if bool(hit)]
+        if not hit_positions:
             continue
-        # For each of the latest RECENCY bars, compare to strictly prior LOOKBACK bars.
-        hits = []
-        for i in range(max(LOOKBACK, len(ratio) - RECENCY), len(ratio)):
-            prior_high = ratio.iloc[i - LOOKBACK:i].max()
-            if pd.notna(prior_high) and ratio.iloc[i] > prior_high:
-                hits.append((i, float(ratio.iloc[i]), float(prior_high)))
-        if not hits:
-            continue
-        latest_i, latest_rs, previous_high = hits[-1]
+
+        recent_start = len(spy) - len(recent)
+        latest_position = recent_start + hit_positions[-1]
+        breakout_date = spy.index[latest_position]
+        latest_rs = float(ratio.iloc[latest_position])
+        previous_high = float(prior_high.iloc[latest_position])
         info = universe.loc[universe["name"] == symbol]
         if info.empty:
             continue
         meta = info.iloc[0]
-        bars_ago = len(ratio) - 1 - latest_i
         records.append({
             "symbol": symbol,
             "description": str(meta.get("description", "")),
             "exchange": str(meta.get("exchange", "")),
-            "breakout_date": f"latest session offset {bars_ago} (historical bar timestamps not exposed)",
-            "sessions_ago": bars_ago,
+            "breakout_date": breakout_date.strftime("%Y-%m-%d"),
+            "sessions_ago": len(spy) - 1 - latest_position,
             "rs_ratio": latest_rs,
             "prior_250d_rs_high": previous_high,
             "breakout_pct": (latest_rs / previous_high - 1) * 100,
         })
-    result = pd.DataFrame(records)
-    if result.empty:
-        return pd.DataFrame(columns=["symbol", "description", "exchange", "breakout_date", "sessions_ago", "rs_ratio", "prior_250d_rs_high", "breakout_pct"])
-    return result.sort_values(["sessions_ago", "breakout_pct"], ascending=[True, False]).reset_index(drop=True)
+
+    if not records:
+        return pd.DataFrame(columns=DETAIL_COLUMNS)
+    return pd.DataFrame(records, columns=DETAIL_COLUMNS).sort_values(
+        ["sessions_ago", "breakout_pct"], ascending=[True, False]
+    ).reset_index(drop=True)
 
 
 def main() -> int:
@@ -215,19 +330,19 @@ def main() -> int:
     histories = fetch_histories(universe)
     spy = fetch_spy_history()
     hits = calculate_signals(universe, histories, spy)
+
     OUT.mkdir(exist_ok=True)
     tickers_path = OUT / "rs_new_high_tickers.csv"
     details_path = OUT / "rs_new_high_details.csv"
     hits[["symbol"]].to_csv(tickers_path, index=False)
     hits.to_csv(details_path, index=False)
-    logging.info("Completed. Universe=%s; histories=%s; qualifying tickers=%s", len(universe), len(histories), len(hits))
-    logging.info("Wrote %s and %s", tickers_path, details_path)
+    LOG.info(
+        "Completed. Universe=%s; histories=%s; qualifying tickers=%s; last SPY session=%s",
+        len(universe), len(histories), len(hits), spy.index[-1].date(),
+    )
+    LOG.info("Wrote %s and %s", tickers_path, details_path)
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception:
-        logging.exception("Scanner failed; outputs were not updated.")
-        raise
+    raise SystemExit(main())
