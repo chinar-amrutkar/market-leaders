@@ -30,3 +30,15 @@ GitHub Actions runs at 00:40 UTC Monday to Friday and can also be started manual
 ## Data coverage caveat
 
 TradingView's public screener and the Python `tradingview-screener` package are not a guaranteed institutional security master or market-data SLA. “All US-listed” means all common-stock/ADR instruments discoverable through the configured NASDAQ, NYSE and AMEX screener queries. The run logs the total retrieved universe and fails if query pagination or benchmark/history checks are incomplete. New listings without 250 prior sessions cannot qualify yet.
+
+## Dashboard
+
+The static dashboard is published through GitHub Pages. It reads `outputs/rs_new_high_details.csv` and provides search, sortable columns, copy-tickers and CSV download.
+
+After the first Pages deployment, open:
+
+`https://chinar-amrutkar.github.io/non-extended-leaders/`
+
+To enable Pages for this repository, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source. The `.github/workflows/deploy-pages.yml` workflow then publishes the site whenever the dashboard or scanner CSV changes.
+
+The dashboard can deploy before the first successful scan; it will show an “Awaiting first scan” message until the CSV is published.
