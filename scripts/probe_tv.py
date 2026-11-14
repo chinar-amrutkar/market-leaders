@@ -1,19 +1,18 @@
 from tradingview_screener import Query, col
 
-fields = ["name", "exchange", "close", "time",
-          "close|1D[0]", "close|1D[1]", "time|1D[0]", "time|1D[1]"]
-for ticker, exchange in [("AAPL", "NASDAQ"), ("SPY", "AMEX")]:
-    q = (Query().set_markets("america").select(*fields)
-         .where(col("name") == ticker, col("exchange") == exchange)
-         .limit(1))
-    print("QUERY", ticker, q.query, flush=True)
-    print("RAW", q.get_scanner_data_raw(), flush=True)
+for exchange in ("NASDAQ", "NYSE", "AMEX"):
+    for kind in ("stock", "dr"):
+        q = (Query().set_markets("america")
+             .select("name", "exchange", "type", "typespecs", "description")
+             .where(col("exchange") == exchange, col("close") > 0,
+                    col("type") == kind)
+             .order_by("name").limit(20))
+        count, frame = q.get_scanner_data()
+        print("UNIVERSE", exchange, kind, "count", count,
+              "rows", len(frame), "sample", frame.head(10).to_dict("records"), flush=True)
 
-# Explicitly validate pagination range semantics.
-for start in (0, 1000, 2000):
-    q = (Query().set_markets("america").select("name", "exchange")
-         .where(col("type") == "stock", col("exchange") == "NASDAQ")
-         .order_by("name").offset(start).limit(start + 1000))
-    print("PAGE", start, "RANGE", q.query.get("range"), flush=True)
-    count, frame = q.get_scanner_data()
-    print("PAGE_RESULT", start, count, len(frame), frame.head(2).to_dict("records"), flush=True)
+# Confirm that historical OHLC/time offsets are not returned by the screener.
+q = (Query().set_markets("america")
+     .select("name", "close", "time", "close|1D[0]", "close|1D[1]", "time|1D[0]")
+     .where(col("name") == "AAPL", col("exchange") == "NASDAQ").limit(1))
+print("HISTORY_FIELDS", q.get_scanner_data_raw(), flush=True)
