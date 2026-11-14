@@ -374,7 +374,7 @@ def calculate_signals(
             "description": str(meta.get("description", "")),
             "exchange": str(meta.get("exchange", "")),
             "sector": str(meta.get("sector", "") or ""),
-            "float_shares_outstanding": float(meta.get("float_shares_outstanding", float("nan"))),
+            "float_shares_outstanding": float(pd.to_numeric(meta.get("float_shares_outstanding"), errors="coerce")),
             "breakout_date": breakout_date.strftime("%Y-%m-%d"),
             "close": float(meta.get("close", float("nan"))),
             "adr_pct": float(meta.get("ADRP", float("nan"))),
