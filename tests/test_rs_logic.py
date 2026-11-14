@@ -78,3 +78,51 @@ def test_depositary_receipt_query_is_exchange_scoped():
     assert {item["left"] for item in filters} == {"exchange", "close", "type"}
     assert next(item for item in filters if item["left"] == "exchange")["right"] == "NYSE"
     assert next(item for item in filters if item["left"] == "type")["right"] == "dr"
+
+
+from rs_new_high_scan import (
+    MIN_ADR_PCT,
+    MIN_AVG_DOLLAR_VOLUME_30D,
+    MIN_AVG_VOLUME_10D,
+    MIN_PRICE,
+    apply_liquidity_filters,
+)
+
+
+def _liquidity_rows():
+    return pd.DataFrame([
+        {"name": "PASS", "industry": "Software", "close": 25, "SMA30": 24,
+         "ADRP": 5, "average_volume_10d_calc": 500_000,
+         "average_volume_30d_calc": 2_000_000},
+        {"name": "LOW_PRICE", "industry": "Software", "close": 9.99, "SMA30": 24,
+         "ADRP": 5, "average_volume_10d_calc": 500_000,
+         "average_volume_30d_calc": 2_000_000},
+        {"name": "LOW_DOLLAR_VOL", "industry": "Software", "close": 25, "SMA30": 24,
+         "ADRP": 5, "average_volume_10d_calc": 500_000,
+         "average_volume_30d_calc": 1_000_000},
+        {"name": "LOW_SHARE_VOL", "industry": "Software", "close": 25, "SMA30": 24,
+         "ADRP": 5, "average_volume_10d_calc": 350_000,
+         "average_volume_30d_calc": 2_000_000},
+        {"name": "LOW_ADR", "industry": "Software", "close": 25, "SMA30": 24,
+         "ADRP": 4, "average_volume_10d_calc": 500_000,
+         "average_volume_30d_calc": 2_000_000},
+        {"name": "BIOTECH", "industry": "Biotechnology", "close": 25, "SMA30": 24,
+         "ADRP": 5, "average_volume_10d_calc": 500_000,
+         "average_volume_30d_calc": 2_000_000},
+    ])
+
+
+def test_price_and_nel_liquidity_filters():
+    result = apply_liquidity_filters(_liquidity_rows())
+    assert result["name"].tolist() == ["PASS"]
+    assert MIN_PRICE == 10
+    assert MIN_AVG_DOLLAR_VOLUME_30D == 30_000_000
+    assert MIN_AVG_VOLUME_10D == 350_000
+    assert MIN_ADR_PCT == 4
+
+
+def test_liquidity_filters_reject_missing_or_invalid_values():
+    rows = _liquidity_rows()
+    rows.loc[0, "ADRP"] = None
+    result = apply_liquidity_filters(rows)
+    assert "PASS" not in result["name"].tolist()
