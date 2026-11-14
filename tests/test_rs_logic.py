@@ -58,3 +58,23 @@ def test_flat_relative_strength_has_no_breakout():
     result = calculate_signals(_universe(), {"TEST": stock}, spy)
 
     assert result.empty
+
+from rs_new_high_scan import _universe_query
+
+
+def test_common_universe_query_keeps_exchange_type_and_common_filters():
+    query = _universe_query("NASDAQ", "stock", 1000)
+    filters = query.query["filter"]
+    assert query.query["range"] == [1000, 2000]
+    assert {item["left"] for item in filters} == {"exchange", "close", "type", "typespecs"}
+    assert next(item for item in filters if item["left"] == "exchange")["right"] == "NASDAQ"
+    assert next(item for item in filters if item["left"] == "type")["right"] == "stock"
+
+
+def test_depositary_receipt_query_is_exchange_scoped():
+    query = _universe_query("NYSE", "dr", 0)
+    filters = query.query["filter"]
+    assert query.query["range"] == [0, 1000]
+    assert {item["left"] for item in filters} == {"exchange", "close", "type"}
+    assert next(item for item in filters if item["left"] == "exchange")["right"] == "NYSE"
+    assert next(item for item in filters if item["left"] == "type")["right"] == "dr"
