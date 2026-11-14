@@ -30,8 +30,8 @@ The scan requires a share price above $10, 30-day average dollar volume above $3
 
 ## Outputs
 
-- `outputs/rs_leaders_tickers.csv` — one column, `symbol`
-- `outputs/rs_leaders_details.csv` — symbol, company, exchange, breakout date, sessions ago, RS ratio, prior 250-session RS high and breakout margin
+- `outputs/rs_new_high_tickers.csv` — one column, `symbol`
+- `outputs/rs_new_high_details.csv` — symbol, company, exchange, breakout date, sessions ago, RS ratio, prior 250-session RS high and breakout margin
 
 ## Run locally
 
