@@ -7,6 +7,7 @@ on:
       - "index.html"
       - "outputs/rs_new_high_details.csv"
       - "outputs/rs_new_high_tickers.csv"
+      - "outputs/history/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
@@ -40,6 +41,7 @@ jobs:
           cp index.html site/index.html
           if [ -f outputs/rs_new_high_details.csv ]; then cp outputs/rs_new_high_details.csv site/outputs/; fi
           if [ -f outputs/rs_new_high_tickers.csv ]; then cp outputs/rs_new_high_tickers.csv site/outputs/; fi
+          if [ -d outputs/history ]; then cp -R outputs/history site/outputs/; fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
