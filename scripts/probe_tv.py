@@ -18,3 +18,5 @@ q = (Query().set_markets("america")
 print("HISTORY_FIELDS", q.get_scanner_data_raw(), flush=True)
 
 print('ADR probe rerun')
+
+print('Second probe trigger')
