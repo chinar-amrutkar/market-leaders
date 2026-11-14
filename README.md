@@ -31,7 +31,7 @@ The scan requires a share price above $10, 30-day average dollar volume above $3
 ## Outputs
 
 - `outputs/rs_new_high_tickers.csv` — one column, `symbol`
-- `outputs/rs_new_high_details.csv` — symbol, company, exchange, breakout date, sessions ago, RS ratio, prior 250-session RS high and breakout margin
+- `outputs/rs_new_high_details.csv` — symbol, company, exchange, sector, float shares outstanding, breakout date, sessions ago, price/liquidity metrics, RS ratio, prior 250-session RS high and breakout margin
 
 ## Run locally
 
@@ -61,4 +61,4 @@ The static dashboard is published through GitHub Pages:
 
 `https://chinar-amrutkar.github.io/market-leaders/`
 
-The dashboard reads `outputs/rs_new_high_details.csv` and provides search, sortable columns, copy-tickers and CSV download. To enable Pages, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source.
+The dashboard reads `outputs/rs_new_high_details.csv` and provides search, sortable columns (including sector and float shares outstanding), copy-tickers and CSV download. Float is sourced from TradingView's screener and displayed as a compact share count (K/M/B); unavailable values are shown as an em dash. To enable Pages, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source.
