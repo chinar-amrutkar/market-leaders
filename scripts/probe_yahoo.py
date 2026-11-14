@@ -17,3 +17,5 @@ for ticker in tickers:
     if ticker in data.columns.get_level_values(0):
         close = data[ticker]["Close"].dropna()
         print(ticker, len(close), close.index.min(), close.index.max(), close.tail(2).to_dict())
+
+print('Probe completed.')
