@@ -1,6 +1,10 @@
-# US RS New High Scanner
+# RS Leaders Watchlist
 
-A no-API-key daily scanner for US-listed common stocks and depositary receipts (ADRs).
+A daily watchlist scanner for US-listed stocks and depositary receipts (ADRs) showing strong relative strength versus SPY. It is designed to surface candidates for further chart review and potential pullback entries—not to generate buy signals.
+
+## What this watchlist is for
+
+The scanner identifies stocks making fresh relative-strength highs versus SPY. These are candidates to monitor for pullbacks towards support or moving averages. The scan does not assess entry timing, support quality, trend structure or risk/reward; those decisions require separate chart analysis.
 
 ## Signal definition
 
@@ -26,8 +30,8 @@ The scan requires a share price above $10, 30-day average dollar volume above $3
 
 ## Outputs
 
-- `outputs/rs_new_high_tickers.csv` — one column, `symbol`
-- `outputs/rs_new_high_details.csv` — symbol, company, exchange, breakout date, sessions ago, RS ratio, prior 250-session RS high and breakout margin
+- `outputs/rs_leaders_tickers.csv` — one column, `symbol`
+- `outputs/rs_leaders_details.csv` — symbol, company, exchange, breakout date, sessions ago, RS ratio, prior 250-session RS high and breakout margin
 
 ## Run locally
 
