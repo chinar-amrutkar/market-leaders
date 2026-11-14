@@ -1,0 +1,53 @@
+name: Daily RS new-high scan
+
+on:
+  schedule:
+    # 00:40 UTC weekdays; uses completed daily candles.
+    - cron: "40 0 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-rs-new-high-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run RS scan
+        run: python -u rs_new_high_scan.py
+
+      - name: Commit CSV outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add outputs/rs_new_high_tickers.csv outputs/rs_new_high_details.csv
+          if ! git diff --cached --quiet; then
+            git commit -m "Update RS new-high scan $(date -u +%F)"
+            git push
+          else
+            echo "No output changes to commit."
+          fi
+
+      - name: Upload CSV artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rs-new-high-csvs
+          path: outputs/rs_new_high_*.csv
+          retention-days: 30
