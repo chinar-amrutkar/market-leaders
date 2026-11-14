@@ -59,6 +59,6 @@ TradingView and Yahoo Finance are public, unofficial data interfaces and do not 
 
 The static dashboard is published through GitHub Pages:
 
-`https://chinar-amrutkar.github.io/non-extended-leaders/`
+`https://chinar-amrutkar.github.io/market-leaders/`
 
 The dashboard reads `outputs/rs_new_high_details.csv` and provides search, sortable columns, copy-tickers and CSV download. To enable Pages, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source.
