@@ -112,9 +112,9 @@ def _liquidity_rows():
     ])
 
 
-def test_price_and_nel_liquidity_filters():
+def test_price_and_nel_liquidity_filters_include_biotech():
     result = apply_liquidity_filters(_liquidity_rows())
-    assert result["name"].tolist() == ["PASS"]
+    assert result["name"].tolist() == ["PASS", "BIOTECH"]
     assert MIN_PRICE == 10
     assert MIN_AVG_DOLLAR_VOLUME_30D == 30_000_000
     assert MIN_AVG_VOLUME_10D == 350_000
