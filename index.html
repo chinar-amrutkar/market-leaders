@@ -30,4 +30,8 @@ document.getElementById('refresh').addEventListener('click',load);
 document.getElementById('copy').addEventListener('click',async()=>{const value=filtered.map(r=>r.symbol).join(', ');try{await navigator.clipboard.writeText(value);document.getElementById('copy').textContent='Copied '+filtered.length}catch(e){alert(value||'No tickers to copy')}});
 document.getElementById('download').addEventListener('click',()=>{const header=['symbol','description','exchange','breakout_date','sessions_ago','close','adr_pct','average_volume_10d','average_dollar_volume_30d','rs_ratio','prior_250d_rs_high','breakout_pct'];const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const csv=[header.join(','),...filtered.map(r=>header.map(k=>quote(r[k])).join(','))].join('\n');const a=document.createElement('a');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.href=url;a.download='rs_new_high_details.csv';a.click();URL.revokeObjectURL(url)});
 load();
-</script></body></html>
+</script>
+<!-- Cloudflare Web Analytics -->
+<script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "1d888284976f48a6a1f2453f7dfd7d1e"}'></script>
+<!-- End Cloudflare Web Analytics -->
+</body></html>
