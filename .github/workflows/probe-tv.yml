@@ -21,3 +21,4 @@ jobs:
           python-version: "3.11"
       - run: pip install yfinance tradingview-screener==3.2.2
       - run: python scripts/probe_yahoo.py
+      - run: python scripts/probe_tv.py
