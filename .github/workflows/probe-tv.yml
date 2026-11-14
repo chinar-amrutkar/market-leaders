@@ -1,0 +1,29 @@
+name: Probe TradingView history fields
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install tradingview-screener==3.2.2
+      - name: Probe timestamps and history offsets
+        run: |
+          python - <<'PY'
+          from tradingview_screener import Query, col
+          fields = ["name", "exchange", "close", "time",
+                    "close|1D[0]", "close|1D[1]", "time|1D[0]", "time|1D[1]"]
+          q = (Query().set_markets("america").select(*fields)
+               .where(col("name") == "AAPL", col("exchange") == "NASDAQ")
+               .limit(1))
+          print("QUERY", q.query)
+          print("RAW", q.get_scanner_data_raw())
+          PY
