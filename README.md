@@ -31,7 +31,9 @@ The scan requires a share price above $10, 30-day average dollar volume above $3
 ## Outputs
 
 - `outputs/rs_new_high_tickers.csv` — one column, `symbol`
-- `outputs/rs_new_high_details.csv` — symbol, company, exchange, sector, float shares outstanding, breakout date, sessions ago, price/liquidity metrics, RS ratio, prior 250-session RS high and breakout margin
+- `outputs/rs_new_high_details.csv` — latest symbol, company, exchange, sector, float shares outstanding, breakout date, sessions ago, price/liquidity metrics, RS ratio, prior 250-session RS high and breakout margin
+- `outputs/history/rs_new_high_details_YYYY-MM-DD.csv` — dated end-of-session snapshots, retained in the repository
+- `outputs/history/manifest.json` — available snapshot dates and the latest 10 completed SPY trading sessions
 
 ## Run locally
 
@@ -61,4 +63,4 @@ The static dashboard is published through GitHub Pages:
 
 `https://chinar-amrutkar.github.io/market-leaders/`
 
-The dashboard reads `outputs/rs_new_high_details.csv` and provides search, sortable columns (including sector and float shares outstanding), copy-tickers and CSV download. Float is sourced from TradingView's screener and displayed as a compact share count (K/M/B); unavailable values are shown as an em dash. To enable Pages, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source.
+The dashboard reads `outputs/rs_new_high_details.csv` and provides search, sortable columns (including sector and float shares outstanding), copy-tickers and CSV download. A date dropdown loads archived end-of-session lists. The sector distribution chart groups the latest scan's leaders by their most recent breakout date and sector across the latest 10 completed SPY sessions; dates with no qualifying breakouts show zero. Float is sourced from TradingView's screener and displayed as a compact share count (K/M/B); unavailable values are shown as an em dash. To enable Pages, go to **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source.
