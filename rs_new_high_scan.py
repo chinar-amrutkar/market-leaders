@@ -410,7 +410,7 @@ def calculate_weekly_lead_signal(
     valid_history = prior_rs_high.notna() & prior_price_high.notna()
     rs_lead_events = (
         valid_history
-        & rs.gt(prior_rs_high)
+        & rs.ge(prior_rs_high)
         & weekly["stock_high"].lt(prior_price_high)
     )
     price_break_events = valid_history & weekly["stock_high"].ge(prior_price_high)
