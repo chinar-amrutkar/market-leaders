@@ -438,7 +438,11 @@ def calculate_signals(
         if info.empty:
             continue
         meta = info.iloc[0]
-        primary = signals["12m"] or min((v for v in signals.values() if v), key=lambda v: v["sessions_ago"])
+        daily_signals = [v for v in signals.values() if v]
+        primary = signals["12m"] or (min(daily_signals, key=lambda v: v["sessions_ago"]) if daily_signals else {
+            "date": weekly_signal["date"], "sessions_ago": 0,
+            "rs_ratio": float("nan"), "breakout_pct": float("nan"),
+        })
         record = {
             "symbol": symbol, "description": str(meta.get("description", "")),
             "exchange": str(meta.get("exchange", "")), "sector": str(meta.get("sector", "") or ""),
