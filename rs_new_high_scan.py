@@ -24,6 +24,7 @@ from tradingview_screener import Query, col
 LOG = logging.getLogger("rs_scan")
 EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 LOOKBACKS = {"3m": 63, "6m": 126, "12m": 250}
+LOOKBACK = LOOKBACKS["12m"]  # Backwards-compatible alias for the 12m window.
 RECENCY = 10
 MIN_HISTORY = max(LOOKBACKS.values()) + RECENCY
 PAGE_SIZE = 1000
