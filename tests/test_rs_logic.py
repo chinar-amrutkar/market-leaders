@@ -1,6 +1,6 @@
 import pandas as pd
 
-from rs_new_high_scan import LOOKBACK, RECENCY, calculate_signals
+from rs_new_high_scan import LOOKBACK, RECENCY, calculate_signals, calculate_weekly_lead_signal
 
 
 def _universe(symbol="TEST"):
@@ -126,3 +126,47 @@ def test_liquidity_filters_reject_missing_or_invalid_values():
     rows.loc[0, "ADRP"] = None
     result = apply_liquidity_filters(rows)
     assert "PASS" not in result["name"].tolist()
+
+
+
+def test_weekly_rs_high_leads_price_high():
+    # 60 completed Friday-ending weeks give a full 52-week comparison window.
+    dates = pd.bdate_range("2025-01-06", periods=60 * 5)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+
+    # Establish a prior 52-week price high, then hold below it.
+    stock.loc[dates[40 * 5]:] = 110.0
+    stock.loc[dates[50 * 5]:dates[50 * 5 + 4]] = 120.0
+    stock.loc[dates[51 * 5]:] = 110.0
+
+    # A sharp benchmark decline makes weekly RS exceed its prior 52-week high.
+    spy.loc[dates[-5]:] = 80.0
+
+    signal = calculate_weekly_lead_signal(stock, spy)
+
+    assert signal is not None
+    assert signal["date"] == dates[-1].strftime("%Y-%m-%d")
+    assert signal["price_vs_high_pct"] < 0
+    assert signal["rs_breakout_pct"] > 0
+
+
+def test_weekly_signal_rejects_rs_high_when_price_also_makes_new_high():
+    dates = pd.bdate_range("2025-01-06", periods=60 * 5)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+    stock.iloc[-5:] = 130.0
+
+    assert calculate_weekly_lead_signal(stock, spy) is None
+
+
+def test_weekly_signal_ignores_incomplete_current_week():
+    dates = pd.bdate_range("2025-01-06", periods=60 * 5)
+    spy = pd.Series(100.0, index=dates)
+    stock = pd.Series(100.0, index=dates)
+    stock.iloc[-5:] = 110.0
+    # Remove Friday: Thursday is the latest session, so the current week is incomplete.
+    stock = stock.iloc[:-1]
+    spy = spy.iloc[:-1]
+
+    assert calculate_weekly_lead_signal(stock, spy) is None
