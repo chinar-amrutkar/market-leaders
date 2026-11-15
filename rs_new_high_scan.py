@@ -26,8 +26,9 @@ EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 LOOKBACKS = {"3m": 63, "6m": 126, "12m": 250}
 LOOKBACK = LOOKBACKS["12m"]  # Backwards-compatible alias for the 12m window.
 RECENCY = 10
-WEEKLY_LOOKBACK = 250
-YAHOO_HISTORY_PERIOD = "10y"
+WEEKLY_LOOKBACK = 52
+WEEKLY_SIGNAL_EXPIRY = 20
+YAHOO_HISTORY_PERIOD = "2y"
 MIN_HISTORY = max(LOOKBACKS.values()) + RECENCY
 PAGE_SIZE = 1000
 MAX_PAGES = 20
@@ -47,7 +48,7 @@ DETAIL_COLUMNS = [
     "breakout_date_3m", "sessions_ago_3m", "rs_ratio_3m", "prior_rs_high_3m", "breakout_pct_3m",
     "breakout_date_6m", "sessions_ago_6m", "rs_ratio_6m", "prior_rs_high_6m", "breakout_pct_6m",
     "breakout_date_12m", "sessions_ago_12m", "rs_ratio_12m", "prior_rs_high_12m", "breakout_pct_12m",
-    "weekly_signal", "weekly_rs_date", "weekly_rs_ratio", "weekly_prior_rs_high",
+    "weekly_signal", "weekly_rs_date", "weekly_signal_age_weeks", "weekly_rs_ratio", "weekly_prior_rs_high",
     "weekly_rs_breakout_pct", "weekly_price_high", "weekly_price_vs_high_pct",
 ]
 
@@ -236,24 +237,34 @@ def _normalise_daily_series(series: pd.Series) -> pd.Series:
     return result
 
 
-def _extract_close(data: pd.DataFrame, ticker: str) -> pd.Series:
-    """Extract one ticker's Close series from yfinance's single/multi-ticker shapes."""
+def _extract_field(data: pd.DataFrame, ticker: str, field: str) -> pd.Series:
+    """Extract one OHLC field from yfinance's single/multi-ticker shapes."""
     if data is None or data.empty:
         return pd.Series(dtype="float64")
     if isinstance(data.columns, pd.MultiIndex):
         level0 = data.columns.get_level_values(0)
         level1 = data.columns.get_level_values(1)
         if ticker in level0:
-            series = data[ticker]["Close"]
-        elif "Close" in level0 and ticker in level1:
-            series = data["Close"][ticker]
+            if field not in data[ticker].columns:
+                return pd.Series(dtype="float64")
+            series = data[ticker][field]
+        elif field in level0 and ticker in level1:
+            series = data[field][ticker]
         else:
             return pd.Series(dtype="float64")
     else:
-        if "Close" not in data.columns:
+        if field not in data.columns:
             return pd.Series(dtype="float64")
-        series = data["Close"]
+        series = data[field]
     return _normalise_daily_series(series)
+
+
+def _extract_close(data: pd.DataFrame, ticker: str) -> pd.Series:
+    return _extract_field(data, ticker, "Close")
+
+
+def _extract_high(data: pd.DataFrame, ticker: str) -> pd.Series:
+    return _extract_field(data, ticker, "High")
 
 
 def _download_yahoo_batch(symbols: list[str], batch_number: int) -> pd.DataFrame:
@@ -286,43 +297,45 @@ def _download_yahoo_batch(symbols: list[str], batch_number: int) -> pd.DataFrame
     return pd.DataFrame()
 
 
-def fetch_histories(universe: pd.DataFrame) -> dict[str, pd.Series]:
-    """Fetch up to ten years of daily closes for daily and 250-week RS analysis."""
+def fetch_histories(
+    universe: pd.DataFrame,
+) -> tuple[dict[str, pd.Series], dict[str, pd.Series]]:
+    """Fetch daily closes and highs; weekly signals need the true weekly high."""
     tv_to_yahoo = {
         row["name"]: yahoo_symbol(row["name"])
         for _, row in universe.iterrows()
     }
     yahoo_symbols = list(dict.fromkeys(tv_to_yahoo.values()))
-    histories: dict[str, pd.Series] = {}
+    close_histories: dict[str, pd.Series] = {}
+    high_histories: dict[str, pd.Series] = {}
     total_batches = math.ceil(len(yahoo_symbols) / YAHOO_BATCH_SIZE)
 
     for batch_idx, start in enumerate(range(0, len(yahoo_symbols), YAHOO_BATCH_SIZE), start=1):
         batch = yahoo_symbols[start:start + YAHOO_BATCH_SIZE]
-        LOG.info("Downloading Yahoo daily history batch %s/%s (%s symbols)",
+        LOG.info("Downloading Yahoo daily OHLC batch %s/%s (%s symbols)",
                  batch_idx, total_batches, len(batch))
         data = _download_yahoo_batch(batch, batch_idx)
-        batch_found = 0
         for tv_symbol, yf_symbol in tv_to_yahoo.items():
             if yf_symbol not in batch:
                 continue
             close = _extract_close(data, yf_symbol)
-            if len(close) >= MIN_HISTORY:
-                histories[tv_symbol] = close
-                batch_found += 1
+            high = _extract_high(data, yf_symbol)
+            if len(close) >= MIN_HISTORY and len(high) >= MIN_HISTORY:
+                close_histories[tv_symbol] = close
+                high_histories[tv_symbol] = high
         LOG.info("Yahoo history coverage after batch %s: %s/%s symbols",
-                 batch_idx, len(histories), len(universe))
-        # Short pause reduces the chance of upstream throttling between batches.
+                 batch_idx, len(close_histories), len(universe))
         time.sleep(0.5)
 
-    coverage = len(histories) / max(1, len(universe))
-    LOG.info("Yahoo history coverage: %.1f%% (%s/%s)",
-             coverage * 100, len(histories), len(universe))
+    coverage = len(close_histories) / max(1, len(universe))
+    LOG.info("Yahoo OHLC history coverage: %.1f%% (%s/%s)",
+             coverage * 100, len(close_histories), len(universe))
     if coverage < MIN_HISTORY_COVERAGE:
         raise RuntimeError(
-            f"Yahoo daily history coverage only {coverage:.1%}; "
+            f"Yahoo daily OHLC history coverage only {coverage:.1%}; "
             f"minimum required is {MIN_HISTORY_COVERAGE:.0%}. Refusing to publish."
         )
-    return histories
+    return close_histories, high_histories
 
 
 def fetch_spy_history() -> pd.Series:
@@ -350,35 +363,47 @@ def fetch_spy_history() -> pd.Series:
     return spy
 
 
-def calculate_weekly_lead_signal(stock: pd.Series, spy: pd.Series) -> dict | None:
-    """Track a 250-week RS breakout until price itself makes a 250-week high.
+def calculate_weekly_lead_signal(
+    stock: pd.Series, spy: pd.Series, stock_high: pd.Series | None = None,
+) -> dict | None:
+    """Return an active 52-week RS-leads-price signal, expiring after 20 weeks.
 
-    A stock qualifies when its weekly RS makes a fresh 250-week high while
-    its weekly close is still below its own prior 250-week price high. The
-    signal persists across subsequent completed weeks and is invalidated by
-    the first later week in which price makes a fresh 250-week high.
+    Trigger: weekly close RS makes a fresh 52-week high while the current
+    week's stock high remains below the highest weekly high in that window.
+    The signal persists until a later 52-week price-high breakout or 20
+    completed weeks have elapsed since the latest qualifying RS high.
     """
     stock = _normalise_daily_series(stock)
     spy = _normalise_daily_series(spy)
-    aligned = pd.concat([stock.rename("stock"), spy.rename("spy")], axis=1).dropna()
+    high = _normalise_daily_series(stock_high if stock_high is not None else stock)
+    aligned = pd.concat([
+        stock.rename("stock_close"),
+        spy.rename("spy_close"),
+        high.rename("stock_high"),
+    ], axis=1).dropna()
     if aligned.empty:
         return None
 
-    weekly = aligned.resample("W-FRI").last().dropna()
-    # Only include fully completed Friday-ending weeks.
+    weekly = pd.DataFrame({
+        "stock_close": aligned["stock_close"].resample("W-FRI").last(),
+        "spy_close": aligned["spy_close"].resample("W-FRI").last(),
+        "stock_high": aligned["stock_high"].resample("W-FRI").max(),
+    }).dropna()
+    # The scanner runs after the US close. Keep only the latest Friday-ending
+    # week represented by the most recent completed US trading session.
     latest_session = aligned.index.max()
-    last_completed_friday = latest_session - pd.Timedelta(
-        days=(latest_session.weekday() - 4) % 7
+    last_completed_friday = latest_session + pd.Timedelta(
+        days=(4 - latest_session.weekday()) % 7
     )
     weekly = weekly.loc[weekly.index <= last_completed_friday]
     if len(weekly) < WEEKLY_LOOKBACK + 1:
         return None
 
-    rs = weekly["stock"] / weekly["spy"]
+    rs = weekly["stock_close"] / weekly["spy_close"]
     prior_rs_high = rs.shift(1).rolling(
         WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
     ).max()
-    prior_price_high = weekly["stock"].shift(1).rolling(
+    prior_price_high = weekly["stock_high"].shift(1).rolling(
         WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
     ).max()
 
@@ -386,37 +411,38 @@ def calculate_weekly_lead_signal(stock: pd.Series, spy: pd.Series) -> dict | Non
     rs_lead_events = (
         valid_history
         & rs.gt(prior_rs_high)
-        & weekly["stock"].lt(prior_price_high)
+        & weekly["stock_high"].lt(prior_price_high)
     )
-    price_break_events = valid_history & weekly["stock"].gt(prior_price_high)
+    price_break_events = valid_history & weekly["stock_high"].ge(prior_price_high)
 
-    rs_positions = [i for i, hit in enumerate(rs_lead_events.tolist()) if bool(hit)]
-    if not rs_positions:
+    positions = [i for i, hit in enumerate(rs_lead_events.tolist()) if bool(hit)]
+    if not positions:
         return None
-    latest_rs_position = rs_positions[-1]
-    price_positions = [i for i, hit in enumerate(price_break_events.tolist()) if bool(hit)]
-    latest_price_position = price_positions[-1] if price_positions else -1
-
-    # The latest qualifying RS breakout must have happened after the latest
-    # 250-week price breakout. This keeps the signal alive until price catches up.
-    if latest_rs_position <= latest_price_position:
+    latest_rs_position = positions[-1]
+    age_weeks = len(weekly) - 1 - latest_rs_position
+    if age_weeks >= WEEKLY_SIGNAL_EXPIRY:
+        return None
+    if price_break_events.iloc[latest_rs_position + 1:].any():
         return None
 
-    current_rs = float(rs.iloc[latest_rs_position])
-    previous_rs_high = float(prior_rs_high.iloc[latest_rs_position])
-    current_price = float(weekly["stock"].iloc[-1])
+    current_close = float(weekly["stock_close"].iloc[-1])
     latest_price_high = float(prior_price_high.iloc[-1])
+    event_rs = float(rs.iloc[latest_rs_position])
+    event_prior_rs_high = float(prior_rs_high.iloc[latest_rs_position])
     return {
         "date": weekly.index[latest_rs_position].strftime("%Y-%m-%d"),
-        "rs_ratio": current_rs,
-        "prior_rs_high": previous_rs_high,
-        "rs_breakout_pct": (current_rs / previous_rs_high - 1) * 100,
+        "age_weeks": age_weeks,
+        "rs_ratio": event_rs,
+        "prior_rs_high": event_prior_rs_high,
+        "rs_breakout_pct": (event_rs / event_prior_rs_high - 1) * 100,
         "price_high": latest_price_high,
-        "price_vs_high_pct": (current_price / latest_price_high - 1) * 100,
+        "price_vs_high_pct": (current_close / latest_price_high - 1) * 100,
     }
+
 
 def calculate_signals(
     universe: pd.DataFrame, histories: dict[str, pd.Series], spy: pd.Series,
+    weekly_highs: dict[str, pd.Series] | None = None,
 ) -> pd.DataFrame:
     """Calculate 3m, 6m and 12m RS highs on SPY sessions."""
     spy = _normalise_daily_series(spy)
@@ -441,7 +467,7 @@ def calculate_signals(
                 "rs_ratio": latest_rs, "prior_high": previous_high,
                 "breakout_pct": (latest_rs / previous_high - 1) * 100,
             }
-        weekly_signal = calculate_weekly_lead_signal(stock, spy)
+        weekly_signal = calculate_weekly_lead_signal(stock, spy, (weekly_highs or {}).get(symbol))
         if not any(signals.values()) and weekly_signal is None:
             continue
         info = universe.loc[universe["name"] == symbol]
@@ -468,6 +494,7 @@ def calculate_signals(
         record.update({
             "weekly_signal": weekly_signal is not None,
             "weekly_rs_date": weekly_signal["date"] if weekly_signal else "",
+            "weekly_signal_age_weeks": weekly_signal["age_weeks"] if weekly_signal else float("nan"),
             "weekly_rs_ratio": weekly_signal["rs_ratio"] if weekly_signal else float("nan"),
             "weekly_prior_rs_high": weekly_signal["prior_rs_high"] if weekly_signal else float("nan"),
             "weekly_rs_breakout_pct": weekly_signal["rs_breakout_pct"] if weekly_signal else float("nan"),
@@ -488,11 +515,11 @@ def calculate_signals(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus persistent 250-week weekly RS-leading-price signals).")
+    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus 52-week weekly RS-leading-price signals with 20-week expiry).")
     universe = get_screener_universe()
-    histories = fetch_histories(universe)
+    histories, weekly_highs = fetch_histories(universe)
     spy = fetch_spy_history()
-    hits = calculate_signals(universe, histories, spy)
+    hits = calculate_signals(universe, histories, spy, weekly_highs)
 
     OUT.mkdir(exist_ok=True)
     tickers_path = OUT / "rs_new_high_tickers.csv"
