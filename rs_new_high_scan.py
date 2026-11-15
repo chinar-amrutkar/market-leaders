@@ -23,9 +23,9 @@ from tradingview_screener import Query, col
 
 LOG = logging.getLogger("rs_scan")
 EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
-LOOKBACK = 250
+LOOKBACKS = {"3m": 63, "6m": 126, "12m": 250}
 RECENCY = 10
-MIN_HISTORY = LOOKBACK + RECENCY
+MIN_HISTORY = max(LOOKBACKS.values()) + RECENCY
 PAGE_SIZE = 1000
 MAX_PAGES = 20
 YAHOO_BATCH_SIZE = 300
@@ -40,6 +40,10 @@ DETAIL_COLUMNS = [
     "symbol", "description", "exchange", "sector", "float_shares_outstanding",
     "breakout_date", "sessions_ago", "close", "adr_pct", "average_volume_10d", "average_dollar_volume_30d",
     "rs_ratio", "prior_250d_rs_high", "breakout_pct",
+    "signal_3m", "signal_6m", "signal_12m",
+    "breakout_date_3m", "sessions_ago_3m", "rs_ratio_3m", "prior_rs_high_3m", "breakout_pct_3m",
+    "breakout_date_6m", "sessions_ago_6m", "rs_ratio_6m", "prior_rs_high_6m", "breakout_pct_6m",
+    "breakout_date_12m", "sessions_ago_12m", "rs_ratio_12m", "prior_rs_high_12m", "breakout_pct_12m",
 ]
 
 
@@ -342,61 +346,65 @@ def fetch_spy_history() -> pd.Series:
 
 
 def calculate_signals(
-    universe: pd.DataFrame,
-    histories: dict[str, pd.Series],
-    spy: pd.Series,
+    universe: pd.DataFrame, histories: dict[str, pd.Series], spy: pd.Series,
 ) -> pd.DataFrame:
-    """Calculate RS highs on SPY sessions; missing stock sessions stay missing."""
+    """Calculate 3m, 6m and 12m RS highs on SPY sessions."""
     spy = _normalise_daily_series(spy)
     records: list[dict] = []
     for symbol, stock_close in histories.items():
-        # Reindex to SPY's exact session dates. Missing bars remain NaN; they are
-        # never positionally paired with a different day's SPY close.
         stock = _normalise_daily_series(stock_close).reindex(spy.index)
         ratio = stock / spy
-        prior_high = ratio.shift(1).rolling(LOOKBACK, min_periods=LOOKBACK).max()
-        is_breakout = ratio.gt(prior_high)
-        recent = is_breakout.iloc[-RECENCY:]
-        hit_positions = [i for i, hit in enumerate(recent.tolist()) if bool(hit)]
-        if not hit_positions:
+        signals: dict[str, dict | None] = {}
+        for label, lookback in LOOKBACKS.items():
+            prior_high = ratio.shift(1).rolling(lookback, min_periods=lookback).max()
+            recent = ratio.gt(prior_high).iloc[-RECENCY:]
+            hit_positions = [i for i, hit in enumerate(recent.tolist()) if bool(hit)]
+            if not hit_positions:
+                signals[label] = None
+                continue
+            latest_position = len(spy) - RECENCY + hit_positions[-1]
+            latest_rs = float(ratio.iloc[latest_position])
+            previous_high = float(prior_high.iloc[latest_position])
+            signals[label] = {
+                "date": spy.index[latest_position].strftime("%Y-%m-%d"),
+                "sessions_ago": len(spy) - 1 - latest_position,
+                "rs_ratio": latest_rs, "prior_high": previous_high,
+                "breakout_pct": (latest_rs / previous_high - 1) * 100,
+            }
+        if not any(signals.values()):
             continue
-
-        recent_start = len(spy) - len(recent)
-        latest_position = recent_start + hit_positions[-1]
-        breakout_date = spy.index[latest_position]
-        latest_rs = float(ratio.iloc[latest_position])
-        previous_high = float(prior_high.iloc[latest_position])
         info = universe.loc[universe["name"] == symbol]
         if info.empty:
             continue
         meta = info.iloc[0]
-        records.append({
-            "symbol": symbol,
-            "description": str(meta.get("description", "")),
-            "exchange": str(meta.get("exchange", "")),
-            "sector": str(meta.get("sector", "") or ""),
+        primary = signals["12m"] or min((v for v in signals.values() if v), key=lambda v: v["sessions_ago"])
+        record = {
+            "symbol": symbol, "description": str(meta.get("description", "")),
+            "exchange": str(meta.get("exchange", "")), "sector": str(meta.get("sector", "") or ""),
             "float_shares_outstanding": float(pd.to_numeric(meta.get("float_shares_outstanding"), errors="coerce")),
-            "breakout_date": breakout_date.strftime("%Y-%m-%d"),
-            "close": float(meta.get("close", float("nan"))),
+            "breakout_date": primary["date"], "close": float(meta.get("close", float("nan"))),
             "adr_pct": float(meta.get("ADRP", float("nan"))),
             "average_volume_10d": float(meta.get("average_volume_10d_calc", float("nan"))),
             "average_dollar_volume_30d": float(meta.get("average_dollar_volume_30d", float("nan"))),
-            "sessions_ago": len(spy) - 1 - latest_position,
-            "rs_ratio": latest_rs,
-            "prior_250d_rs_high": previous_high,
-            "breakout_pct": (latest_rs / previous_high - 1) * 100,
-        })
-
+            "sessions_ago": primary["sessions_ago"], "rs_ratio": primary["rs_ratio"],
+            "prior_250d_rs_high": signals["12m"]["prior_high"] if signals["12m"] else float("nan"),
+            "breakout_pct": primary["breakout_pct"],
+        }
+        for label, signal in signals.items():
+            record["signal_" + label] = signal is not None
+            record["breakout_date_" + label] = signal["date"] if signal else ""
+            record["sessions_ago_" + label] = signal["sessions_ago"] if signal else float("nan")
+            record["rs_ratio_" + label] = signal["rs_ratio"] if signal else float("nan")
+            record["prior_rs_high_" + label] = signal["prior_high"] if signal else float("nan")
+            record["breakout_pct_" + label] = signal["breakout_pct"] if signal else float("nan")
+        records.append(record)
     if not records:
         return pd.DataFrame(columns=DETAIL_COLUMNS)
-    return pd.DataFrame(records, columns=DETAIL_COLUMNS).sort_values(
-        ["sessions_ago", "breakout_pct"], ascending=[True, False]
-    ).reset_index(drop=True)
-
+    return pd.DataFrame(records, columns=DETAIL_COLUMNS).sort_values(["sessions_ago", "breakout_pct"], ascending=[True, False]).reset_index(drop=True)
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.info("Starting US RS new-high scan (250-session lookback; last 10 completed sessions).")
+    logging.info("Starting US RS new-high scan (63/126/250-session lookbacks; last 10 completed sessions).")
     universe = get_screener_universe()
     histories = fetch_histories(universe)
     spy = fetch_spy_history()
