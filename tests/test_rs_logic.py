@@ -178,7 +178,7 @@ def test_weekly_rs_lead_disappears_when_price_makes_52_week_high():
 def test_weekly_rs_tie_with_prior_52_week_high_matches_tradingview():
     dates, stock, high, spy = _weekly_test_series()
     # Prior weekly RS peak is 120 / 100 = 1.2; current RS ties it.
-    spy.iloc[55 * 5:56 * 5] = 100.0 / 1.2
+    spy.iloc[55 * 5:56 * 5] = 110.0 / 1.2
     signal = calculate_weekly_lead_signal(
         stock.iloc[:56 * 5], spy.iloc[:56 * 5], high.iloc[:56 * 5]
     )
