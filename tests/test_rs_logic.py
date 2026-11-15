@@ -40,7 +40,7 @@ def test_missing_stock_session_is_not_positionally_paired_to_spy():
     dates = pd.bdate_range("2025-01-01", periods=LOOKBACK + RECENCY + 1)
     spy = pd.Series(100.0, index=dates)
     stock = pd.Series(100.0, index=dates)
-    stock.iloc[20] = float("nan")
+    stock.iloc[-20] = float("nan")
     stock.iloc[-1] = 110.0
 
     result = calculate_signals(_universe(), {"TEST": stock}, spy)
