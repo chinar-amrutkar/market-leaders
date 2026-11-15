@@ -407,9 +407,12 @@ def calculate_weekly_lead_signal(
 
     current_rs = rs.iloc[-1]
     current_rs_high = rs_high.iloc[-1]
+    previous_rs_high = rs.shift(1).rolling(
+        WEEKLY_LOOKBACK - 1, min_periods=WEEKLY_LOOKBACK - 1
+    ).max().iloc[-1]
     current_week_high = weekly["stock_high"].iloc[-1]
     current_price_high = price_high.iloc[-1]
-    if pd.isna(current_rs_high) or pd.isna(current_price_high):
+    if pd.isna(current_rs_high) or pd.isna(previous_rs_high) or pd.isna(current_price_high):
         return None
     if current_rs != current_rs_high or current_week_high >= current_price_high:
         return None
@@ -419,8 +422,8 @@ def calculate_weekly_lead_signal(
         "date": weekly.index[-1].strftime("%Y-%m-%d"),
         "age_weeks": 0,
         "rs_ratio": float(current_rs),
-        "prior_rs_high": float(current_rs_high),
-        "rs_breakout_pct": (float(current_rs) / float(current_rs_high) - 1) * 100,
+        "prior_rs_high": float(previous_rs_high),
+        "rs_breakout_pct": (float(current_rs) / float(previous_rs_high) - 1) * 100,
         "price_high": float(current_price_high),
         "price_vs_high_pct": (current_close / float(current_price_high) - 1) * 100,
     }
