@@ -392,8 +392,8 @@ def calculate_weekly_lead_signal(
     # The scanner runs after the US close. Keep only the latest Friday-ending
     # week represented by the most recent completed US trading session.
     latest_session = aligned.index.max()
-    last_completed_friday = latest_session + pd.Timedelta(
-        days=(4 - latest_session.weekday()) % 7
+    last_completed_friday = latest_session - pd.Timedelta(
+        days=(latest_session.weekday() - 4) % 7
     )
     weekly = weekly.loc[weekly.index <= last_completed_friday]
     if len(weekly) < WEEKLY_LOOKBACK + 1:
