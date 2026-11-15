@@ -143,44 +143,51 @@ def _weekly_test_series(weeks=80):
 def test_weekly_rs_lead_persists_for_20_weeks_then_expires():
     dates, stock, high, spy = _weekly_test_series()
     spy.iloc[55 * 5:56 * 5] = 80.0
-    signal = calculate_weekly_lead_signal(stock, spy, high)
+
+    # Trigger week 55, then verify it remains active 19 completed weeks later.
+    signal = calculate_weekly_lead_signal(
+        stock.iloc[:56 * 5], spy.iloc[:56 * 5], high.iloc[:56 * 5]
+    )
     assert signal is not None
     assert signal["date"] == dates[55 * 5 + 4].strftime("%Y-%m-%d")
     assert signal["age_weeks"] == 0
     assert signal["price_vs_high_pct"] < 0
 
-    # Still active after 19 completed weeks.
     signal = calculate_weekly_lead_signal(
         stock.iloc[:75 * 5], spy.iloc[:75 * 5], high.iloc[:75 * 5]
     )
     assert signal is not None
     assert signal["age_weeks"] == 19
 
-    # Expires once 20 completed weeks have elapsed since the RS high.
-    assert calculate_weekly_lead_signal(stock, spy, high) is None
+    # At 20 completed weeks after the RS high, the signal has expired.
+    assert calculate_weekly_lead_signal(
+        stock.iloc[:76 * 5], spy.iloc[:76 * 5], high.iloc[:76 * 5]
+    ) is None
 
 
 def test_weekly_rs_lead_disappears_when_price_makes_52_week_high():
     dates, stock, high, spy = _weekly_test_series()
     spy.iloc[55 * 5:56 * 5] = 80.0
-    # A later weekly high reaches/exceeds the prior 52-week highest high.
     high.iloc[60 * 5:61 * 5] = 125.0
     stock.iloc[60 * 5:61 * 5] = 120.0
-    assert calculate_weekly_lead_signal(stock, spy, high) is None
+    assert calculate_weekly_lead_signal(
+        stock.iloc[:61 * 5], spy.iloc[:61 * 5], high.iloc[:61 * 5]
+    ) is None
 
 
 def test_weekly_trigger_uses_intrawEEK_high_not_weekly_close():
     dates, stock, high, spy = _weekly_test_series()
     spy.iloc[55 * 5:56 * 5] = 80.0
-    # Weekly close remains below the old high, but the week's high has caught it.
     high.iloc[55 * 5:56 * 5] = 120.0
-    assert calculate_weekly_lead_signal(stock, spy, high) is None
+    assert calculate_weekly_lead_signal(
+        stock.iloc[:56 * 5], spy.iloc[:56 * 5], high.iloc[:56 * 5]
+    ) is None
 
 
 def test_weekly_signal_ignores_incomplete_current_week():
     dates, stock, high, spy = _weekly_test_series()
+    # Make the only RS surge occur in the incomplete final week.
     spy.iloc[-5:] = 80.0
-    # Remove Friday: the current week is incomplete and cannot trigger.
     stock = stock.iloc[:-1]
     high = high.iloc[:-1]
     spy = spy.iloc[:-1]
