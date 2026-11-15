@@ -145,29 +145,58 @@ def _weekly_test_series(weeks=80):
     return dates, stock, high, spy
 
 
-def test_weekly_current_rs_high_before_price_is_listed():
+def test_weekly_rs_lead_persists_for_up_to_20_weeks():
     dates, stock, high, spy = _weekly_test_series()
     spy.iloc[55 * 5:56 * 5] = 80.0
-    signal = calculate_weekly_lead_signal(stock.iloc[:56 * 5], spy.iloc[:56 * 5], high.iloc[:56 * 5])
-    assert signal is not None
-    assert signal["date"] == dates[55 * 5 + 4].strftime("%Y-%m-%d")
-    assert signal["age_weeks"] == 0
-    assert signal["price_vs_high_pct"] < 0
-
-
-def test_weekly_signal_is_not_persistent_when_rs_stops_making_highs():
-    dates, stock, high, spy = _weekly_test_series()
-    spy.iloc[55 * 5:56 * 5] = 80.0
-    # Week 55 qualifies; by week 56 RS has reverted and is no longer a 52w high.
-    assert calculate_weekly_lead_signal(
+    signal = calculate_weekly_lead_signal(
         stock.iloc[:56 * 5], spy.iloc[:56 * 5], high.iloc[:56 * 5]
-    ) is not None
+    )
+    assert signal is not None
+    assert signal["age_weeks"] == 0
+
+    # RS has reverted, but price has not broken its 52-week high.
+    signal = calculate_weekly_lead_signal(
+        stock.iloc[:60 * 5], spy.iloc[:60 * 5], high.iloc[:60 * 5]
+    )
+    assert signal is not None
+    assert signal["age_weeks"] == 4
+    assert signal["date"] == dates[55 * 5 + 4].strftime("%Y-%m-%d")
+
+
+def test_weekly_rs_lead_expires_after_20_completed_weeks():
+    dates, stock, high, spy = _weekly_test_series(weeks=80)
+    spy.iloc[55 * 5:56 * 5] = 80.0
+    # 19 weeks after the trigger remains active; 20 weeks after is expired.
     assert calculate_weekly_lead_signal(
-        stock.iloc[:57 * 5], spy.iloc[:57 * 5], high.iloc[:57 * 5]
+        stock.iloc[:75 * 5], spy.iloc[:75 * 5], high.iloc[:75 * 5]
+    ) is not None
+    assert calculate_weekly_lead_signal(stock, spy, high) is None
+
+
+def test_weekly_rs_lead_exits_when_price_breaks_52_week_high():
+    dates, stock, high, spy = _weekly_test_series()
+    spy.iloc[55 * 5:56 * 5] = 80.0
+    # A later week's high equals the prior 52-week high, invalidating the signal.
+    high.iloc[60 * 5:61 * 5] = 120.0
+    assert calculate_weekly_lead_signal(
+        stock.iloc[:61 * 5], spy.iloc[:61 * 5], high.iloc[:61 * 5]
     ) is None
 
 
-def test_weekly_signal_is_false_if_price_also_makes_52_week_high():
+def test_newer_weekly_rs_event_resets_signal_age():
+    dates, stock, high, spy = _weekly_test_series()
+    spy.iloc[55 * 5:56 * 5] = 80.0
+    # A second, stronger RS event occurs at week 60, without a price breakout.
+    spy.iloc[60 * 5:61 * 5] = 70.0
+    signal = calculate_weekly_lead_signal(
+        stock.iloc[:61 * 5], spy.iloc[:61 * 5], high.iloc[:61 * 5]
+    )
+    assert signal is not None
+    assert signal["date"] == dates[60 * 5 + 4].strftime("%Y-%m-%d")
+    assert signal["age_weeks"] == 0
+
+
+def test_weekly_signal_is_false_if_trigger_week_also_makes_price_high():
     dates, stock, high, spy = _weekly_test_series()
     spy.iloc[55 * 5:56 * 5] = 80.0
     high.iloc[55 * 5:56 * 5] = 120.0
@@ -176,7 +205,7 @@ def test_weekly_signal_is_false_if_price_also_makes_52_week_high():
     ) is None
 
 
-def test_weekly_rs_equal_to_52_week_max_counts_as_new_high():
+def test_weekly_rs_equal_to_prior_52_week_max_counts_as_lead():
     dates, stock, high, spy = _weekly_test_series()
     # Set the earlier RS peak and the current RS to exactly the same ratio.
     spy.iloc[30 * 5:31 * 5] = 100.0
@@ -197,6 +226,6 @@ def test_weekly_signal_ignores_incomplete_current_week():
     assert calculate_weekly_lead_signal(stock, spy, high) is None
 
 
-def test_weekly_signal_requires_52_completed_bars():
-    dates, stock, high, spy = _weekly_test_series(weeks=51)
+def test_weekly_signal_requires_53_completed_bars_for_prior_window():
+    dates, stock, high, spy = _weekly_test_series(weeks=52)
     assert calculate_weekly_lead_signal(stock, spy, high) is None
