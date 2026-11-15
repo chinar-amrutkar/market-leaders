@@ -26,6 +26,8 @@ EXCHANGES = ("NASDAQ", "NYSE", "AMEX")
 LOOKBACKS = {"3m": 63, "6m": 126, "12m": 250}
 LOOKBACK = LOOKBACKS["12m"]  # Backwards-compatible alias for the 12m window.
 RECENCY = 10
+WEEKLY_LOOKBACK = 52
+WEEKLY_RECENCY = 4
 MIN_HISTORY = max(LOOKBACKS.values()) + RECENCY
 PAGE_SIZE = 1000
 MAX_PAGES = 20
@@ -45,6 +47,8 @@ DETAIL_COLUMNS = [
     "breakout_date_3m", "sessions_ago_3m", "rs_ratio_3m", "prior_rs_high_3m", "breakout_pct_3m",
     "breakout_date_6m", "sessions_ago_6m", "rs_ratio_6m", "prior_rs_high_6m", "breakout_pct_6m",
     "breakout_date_12m", "sessions_ago_12m", "rs_ratio_12m", "prior_rs_high_12m", "breakout_pct_12m",
+    "weekly_signal", "weekly_rs_date", "weekly_rs_ratio", "weekly_prior_rs_high",
+    "weekly_rs_breakout_pct", "weekly_price_high", "weekly_price_vs_high_pct",
 ]
 
 
@@ -346,6 +350,63 @@ def fetch_spy_history() -> pd.Series:
     return spy
 
 
+def calculate_weekly_lead_signal(stock: pd.Series, spy: pd.Series) -> dict | None:
+    """Find a fresh 52-week weekly RS high while price remains below its own high.
+
+    Only completed Friday-ending weeks are considered. A signal is retained if
+    it occurred in one of the latest four completed weeks.
+    """
+    stock = _normalise_daily_series(stock)
+    spy = _normalise_daily_series(spy)
+    aligned = pd.concat([stock.rename("stock"), spy.rename("spy")], axis=1).dropna()
+    if aligned.empty:
+        return None
+
+    weekly = aligned.resample("W-FRI").last().dropna()
+    # The final Friday-labelled bucket is incomplete unless the latest SPY
+    # session itself was Friday (including a Friday holiday's prior session
+    # only when the next week's session has already arrived).
+    latest_session = aligned.index.max()
+    last_completed_friday = latest_session - pd.Timedelta(
+        days=(latest_session.weekday() - 4) % 7
+    )
+    if latest_session.weekday() != 4:
+        last_completed_friday -= pd.Timedelta(days=7)
+    weekly = weekly.loc[weekly.index <= last_completed_friday]
+    if len(weekly) < WEEKLY_LOOKBACK + 1:
+        return None
+
+    rs = weekly["stock"] / weekly["spy"]
+    prior_rs_high = rs.shift(1).rolling(WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK).max()
+    prior_price_high = weekly["stock"].shift(1).rolling(
+        WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
+    ).max()
+    valid = (
+        rs.gt(prior_rs_high)
+        & weekly["stock"].lt(prior_price_high)
+        & prior_rs_high.notna()
+        & prior_price_high.notna()
+    )
+    recent = valid.iloc[-WEEKLY_RECENCY:]
+    positions = [i for i, hit in enumerate(recent.tolist()) if bool(hit)]
+    if not positions:
+        return None
+
+    position = len(weekly) - len(recent) + positions[-1]
+    current_rs = float(rs.iloc[position])
+    previous_rs_high = float(prior_rs_high.iloc[position])
+    current_price = float(weekly["stock"].iloc[position])
+    previous_price_high = float(prior_price_high.iloc[position])
+    return {
+        "date": weekly.index[position].strftime("%Y-%m-%d"),
+        "rs_ratio": current_rs,
+        "prior_rs_high": previous_rs_high,
+        "rs_breakout_pct": (current_rs / previous_rs_high - 1) * 100,
+        "price_high": previous_price_high,
+        "price_vs_high_pct": (current_price / previous_price_high - 1) * 100,
+    }
+
+
 def calculate_signals(
     universe: pd.DataFrame, histories: dict[str, pd.Series], spy: pd.Series,
 ) -> pd.DataFrame:
@@ -372,7 +433,8 @@ def calculate_signals(
                 "rs_ratio": latest_rs, "prior_high": previous_high,
                 "breakout_pct": (latest_rs / previous_high - 1) * 100,
             }
-        if not any(signals.values()):
+        weekly_signal = calculate_weekly_lead_signal(stock, spy)
+        if not any(signals.values()) and weekly_signal is None:
             continue
         info = universe.loc[universe["name"] == symbol]
         if info.empty:
@@ -391,6 +453,15 @@ def calculate_signals(
             "prior_250d_rs_high": signals["12m"]["prior_high"] if signals["12m"] else float("nan"),
             "breakout_pct": primary["breakout_pct"],
         }
+        record.update({
+            "weekly_signal": weekly_signal is not None,
+            "weekly_rs_date": weekly_signal["date"] if weekly_signal else "",
+            "weekly_rs_ratio": weekly_signal["rs_ratio"] if weekly_signal else float("nan"),
+            "weekly_prior_rs_high": weekly_signal["prior_rs_high"] if weekly_signal else float("nan"),
+            "weekly_rs_breakout_pct": weekly_signal["rs_breakout_pct"] if weekly_signal else float("nan"),
+            "weekly_price_high": weekly_signal["price_high"] if weekly_signal else float("nan"),
+            "weekly_price_vs_high_pct": weekly_signal["price_vs_high_pct"] if weekly_signal else float("nan"),
+        })
         for label, signal in signals.items():
             record["signal_" + label] = signal is not None
             record["breakout_date_" + label] = signal["date"] if signal else ""
@@ -405,7 +476,7 @@ def calculate_signals(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.info("Starting US RS new-high scan (63/126/250-session lookbacks; last 10 completed sessions).")
+    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus 52-week weekly RS-leading-price signals).")
     universe = get_screener_universe()
     histories = fetch_histories(universe)
     spy = fetch_spy_history()
