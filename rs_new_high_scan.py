@@ -370,8 +370,6 @@ def calculate_weekly_lead_signal(stock: pd.Series, spy: pd.Series) -> dict | Non
     last_completed_friday = latest_session - pd.Timedelta(
         days=(latest_session.weekday() - 4) % 7
     )
-    if latest_session.weekday() != 4:
-        last_completed_friday -= pd.Timedelta(days=7)
     weekly = weekly.loc[weekly.index <= last_completed_friday]
     if len(weekly) < WEEKLY_LOOKBACK + 1:
         return None
