@@ -488,7 +488,7 @@ def calculate_signals(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus 52-week weekly RS-leading-price signals).")
+    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus persistent 250-week weekly RS-leading-price signals).")
     universe = get_screener_universe()
     histories = fetch_histories(universe)
     spy = fetch_spy_history()
