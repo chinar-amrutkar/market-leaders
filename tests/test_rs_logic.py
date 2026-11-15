@@ -135,8 +135,8 @@ def _weekly_test_series(weeks=80):
     stock = pd.Series(110.0, index=dates)
     high = pd.Series(110.0, index=dates)
     # Establish a 52-week price high that the later RS surge leads.
-    high.iloc[10 * 5:13 * 5] = 120.0
-    stock.iloc[10 * 5:13 * 5] = 120.0
+    high.iloc[30 * 5:33 * 5] = 120.0
+    stock.iloc[30 * 5:33 * 5] = 120.0
     return dates, stock, high, spy
 
 
