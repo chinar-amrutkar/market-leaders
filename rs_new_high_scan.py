@@ -366,12 +366,12 @@ def fetch_spy_history() -> pd.Series:
 def calculate_weekly_lead_signal(
     stock: pd.Series, spy: pd.Series, stock_high: pd.Series | None = None,
 ) -> dict | None:
-    """Return an active 52-week RS-leads-price signal, expiring after 20 weeks.
+    """Return the current completed-week TradingView-style 52-week RS lead.
 
-    Trigger: weekly close RS makes a fresh 52-week high while the current
-    week's stock high remains below the highest weekly high in that window.
-    The signal persists until a later 52-week price-high breakout or 20
-    completed weeks have elapsed since the latest qualifying RS high.
+    The current weekly RS must equal the highest RS over the 52-week window
+    (including the current week), while this week's stock high must be below
+    the highest stock weekly high over that same window. This is a current-bar
+    condition, not a latched/persistent event.
     """
     stock = _normalise_daily_series(stock)
     spy = _normalise_daily_series(spy)
@@ -389,54 +389,40 @@ def calculate_weekly_lead_signal(
         "spy_close": aligned["spy_close"].resample("W-FRI").last(),
         "stock_high": aligned["stock_high"].resample("W-FRI").max(),
     }).dropna()
-    # The scanner runs after the US close. Keep only the latest Friday-ending
-    # week represented by the most recent completed US trading session.
+    # Exclude an in-progress week. If the latest session is Thursday because
+    # Friday is a market holiday, the shortened week is picked up on Monday.
     latest_session = aligned.index.max()
     last_completed_friday = latest_session - pd.Timedelta(
         days=(latest_session.weekday() - 4) % 7
     )
     weekly = weekly.loc[weekly.index <= last_completed_friday]
-    if len(weekly) < WEEKLY_LOOKBACK + 1:
+    if len(weekly) < WEEKLY_LOOKBACK:
         return None
 
     rs = weekly["stock_close"] / weekly["spy_close"]
-    prior_rs_high = rs.shift(1).rolling(
-        WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
-    ).max()
-    prior_price_high = weekly["stock_high"].shift(1).rolling(
+    rs_high = rs.rolling(WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK).max()
+    price_high = weekly["stock_high"].rolling(
         WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
     ).max()
 
-    valid_history = prior_rs_high.notna() & prior_price_high.notna()
-    rs_lead_events = (
-        valid_history
-        & rs.ge(prior_rs_high)
-        & weekly["stock_high"].lt(prior_price_high)
-    )
-    price_break_events = valid_history & weekly["stock_high"].ge(prior_price_high)
-
-    positions = [i for i, hit in enumerate(rs_lead_events.tolist()) if bool(hit)]
-    if not positions:
+    current_rs = rs.iloc[-1]
+    current_rs_high = rs_high.iloc[-1]
+    current_week_high = weekly["stock_high"].iloc[-1]
+    current_price_high = price_high.iloc[-1]
+    if pd.isna(current_rs_high) or pd.isna(current_price_high):
         return None
-    latest_rs_position = positions[-1]
-    age_weeks = len(weekly) - 1 - latest_rs_position
-    if age_weeks >= WEEKLY_SIGNAL_EXPIRY:
-        return None
-    if price_break_events.iloc[latest_rs_position + 1:].any():
+    if current_rs != current_rs_high or current_week_high >= current_price_high:
         return None
 
     current_close = float(weekly["stock_close"].iloc[-1])
-    latest_price_high = float(prior_price_high.iloc[-1])
-    event_rs = float(rs.iloc[latest_rs_position])
-    event_prior_rs_high = float(prior_rs_high.iloc[latest_rs_position])
     return {
-        "date": weekly.index[latest_rs_position].strftime("%Y-%m-%d"),
-        "age_weeks": age_weeks,
-        "rs_ratio": event_rs,
-        "prior_rs_high": event_prior_rs_high,
-        "rs_breakout_pct": (event_rs / event_prior_rs_high - 1) * 100,
-        "price_high": latest_price_high,
-        "price_vs_high_pct": (current_close / latest_price_high - 1) * 100,
+        "date": weekly.index[-1].strftime("%Y-%m-%d"),
+        "age_weeks": 0,
+        "rs_ratio": float(current_rs),
+        "prior_rs_high": float(current_rs_high),
+        "rs_breakout_pct": (float(current_rs) / float(current_rs_high) - 1) * 100,
+        "price_high": float(current_price_high),
+        "price_vs_high_pct": (current_close / float(current_price_high) - 1) * 100,
     }
 
 
@@ -515,7 +501,7 @@ def calculate_signals(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus 52-week weekly RS-leading-price signals with 20-week expiry).")
+    logging.info("Starting US RS scan (63/126/250-session daily RS highs plus current-bar 52-week weekly RS-leading-price signals).")
     universe = get_screener_universe()
     histories, weekly_highs = fetch_histories(universe)
     spy = fetch_spy_history()
