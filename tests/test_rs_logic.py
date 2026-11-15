@@ -170,8 +170,9 @@ def test_weekly_rs_lead_disappears_when_price_breaks_250_week_high():
 
 def test_weekly_signal_ignores_incomplete_current_week():
     dates, stock, spy = _weekly_test_series(280)
-    stock.iloc[260 * 5:261 * 5] = 110.0
-    spy.iloc[260 * 5:261 * 5] = 80.0
+    # Create the only RS breakout in the final, incomplete week.
+    stock.iloc[-5:] = 110.0
+    spy.iloc[-5:] = 80.0
     # Remove Friday: the current week is incomplete and must not create a signal.
     stock = stock.iloc[:-1]
     spy = spy.iloc[:-1]
