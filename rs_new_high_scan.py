@@ -366,12 +366,13 @@ def fetch_spy_history() -> pd.Series:
 def calculate_weekly_lead_signal(
     stock: pd.Series, spy: pd.Series, stock_high: pd.Series | None = None,
 ) -> dict | None:
-    """Return the current completed-week TradingView-style 52-week RS lead.
+    """Return an active 52-week RS-leads-price signal.
 
-    The current weekly RS must equal the highest RS over the 52-week window
-    (including the current week), while this week's stock high must be below
-    the highest stock weekly high over that same window. This is a current-bar
-    condition, not a latched/persistent event.
+    A trigger occurs when weekly close RS equals or exceeds the prior 52-week
+    RS high while the current week's stock high remains below the prior
+    52-week stock high. The signal persists for up to 20 completed weeks,
+    exits on a subsequent 52-week price-high breakout, and resets when a
+    newer qualifying RS event occurs.
     """
     stock = _normalise_daily_series(stock)
     spy = _normalise_daily_series(spy)
@@ -389,43 +390,58 @@ def calculate_weekly_lead_signal(
         "spy_close": aligned["spy_close"].resample("W-FRI").last(),
         "stock_high": aligned["stock_high"].resample("W-FRI").max(),
     }).dropna()
-    # Exclude an in-progress week. If the latest session is Thursday because
-    # Friday is a market holiday, the shortened week is picked up on Monday.
+    # Exclude an in-progress week. If Friday is a market holiday, the
+    # shortened week is considered complete once its final session passes.
     latest_session = aligned.index.max()
     last_completed_friday = latest_session - pd.Timedelta(
         days=(latest_session.weekday() - 4) % 7
     )
     weekly = weekly.loc[weekly.index <= last_completed_friday]
-    if len(weekly) < WEEKLY_LOOKBACK:
+    if len(weekly) < WEEKLY_LOOKBACK + 1:
         return None
 
     rs = weekly["stock_close"] / weekly["spy_close"]
-    rs_high = rs.rolling(WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK).max()
-    price_high = weekly["stock_high"].rolling(
+    prior_rs_high = rs.shift(1).rolling(
+        WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
+    ).max()
+    prior_price_high = weekly["stock_high"].shift(1).rolling(
         WEEKLY_LOOKBACK, min_periods=WEEKLY_LOOKBACK
     ).max()
 
-    current_rs = rs.iloc[-1]
-    current_rs_high = rs_high.iloc[-1]
-    previous_rs_high = rs.shift(1).rolling(
-        WEEKLY_LOOKBACK - 1, min_periods=WEEKLY_LOOKBACK - 1
-    ).max().iloc[-1]
-    current_week_high = weekly["stock_high"].iloc[-1]
-    current_price_high = price_high.iloc[-1]
-    if pd.isna(current_rs_high) or pd.isna(previous_rs_high) or pd.isna(current_price_high):
+    valid_history = prior_rs_high.notna() & prior_price_high.notna()
+    rs_lead_events = (
+        valid_history
+        & rs.ge(prior_rs_high)
+        & weekly["stock_high"].lt(prior_price_high)
+    )
+    price_break_events = (
+        valid_history & weekly["stock_high"].ge(prior_price_high)
+    )
+
+    positions = [i for i, hit in enumerate(rs_lead_events.tolist()) if bool(hit)]
+    if not positions:
         return None
-    if current_rs != current_rs_high or current_week_high >= current_price_high:
+
+    # The newest qualifying event supersedes any earlier active event.
+    latest_rs_position = positions[-1]
+    age_weeks = len(weekly) - 1 - latest_rs_position
+    if age_weeks >= WEEKLY_SIGNAL_EXPIRY:
+        return None
+    if price_break_events.iloc[latest_rs_position + 1:].any():
         return None
 
     current_close = float(weekly["stock_close"].iloc[-1])
+    latest_price_high = float(prior_price_high.iloc[-1])
+    event_rs = float(rs.iloc[latest_rs_position])
+    event_prior_rs_high = float(prior_rs_high.iloc[latest_rs_position])
     return {
-        "date": weekly.index[-1].strftime("%Y-%m-%d"),
-        "age_weeks": 0,
-        "rs_ratio": float(current_rs),
-        "prior_rs_high": float(previous_rs_high),
-        "rs_breakout_pct": (float(current_rs) / float(previous_rs_high) - 1) * 100,
-        "price_high": float(current_price_high),
-        "price_vs_high_pct": (current_close / float(current_price_high) - 1) * 100,
+        "date": weekly.index[latest_rs_position].strftime("%Y-%m-%d"),
+        "age_weeks": age_weeks,
+        "rs_ratio": event_rs,
+        "prior_rs_high": event_prior_rs_high,
+        "rs_breakout_pct": (event_rs / event_prior_rs_high - 1) * 100,
+        "price_high": latest_price_high,
+        "price_vs_high_pct": (current_close / latest_price_high - 1) * 100,
     }
 
 
