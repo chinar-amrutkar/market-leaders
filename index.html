@@ -97,7 +97,7 @@ load();
 <script data-goatcounter="https://market-leaders.goatcounter.com/count"
         async src="//gc.zgo.at/count.js"></script>
 <!-- End GoatCounter analytics -->
-</body></html>+activeDollarVolume+'M+ avg $ volume')+' · '+available.length+' archived trading days · '+(available.length?available[0].date+' to '+available[available.length-1].date:'');
++activeDollarVolume+'M+ avg $ volume')+' · '+available.length+' archived trading days · '+(available.length?available[0].date+' to '+available[available.length-1].date:'');
 }
 async function loadRows(url){const res=await fetch(url+'?v='+Date.now(),{cache:'no-store'});if(!res.ok)throw new Error('CSV unavailable: '+res.status);return parseCSV(await res.text())}
 async function loadSelectedHistory(){const selected=document.getElementById('history-date').value;const status=document.getElementById('status-date');try{if(!selected){allRows=currentRows;status.textContent=displayDate(historyManifest?.latest_date)}else{allRows=await loadRows('outputs/history/rs_new_high_details_'+selected+'.csv');status.textContent=displayDate(selected)}document.getElementById('total').textContent=rowsForLookback(allRows).length.toLocaleString();render();await renderSectorChart()}catch(e){status.textContent='Unavailable';}}
