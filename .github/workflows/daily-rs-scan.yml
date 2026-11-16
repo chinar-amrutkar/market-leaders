@@ -2,7 +2,7 @@ name: Daily RS new-high scan
 
 on:
   schedule:
-    - cron: "40 0 * * 1-5"
+    - cron: "0 22 * * 1-5"
   workflow_dispatch:
   push:
     branches: [main]
