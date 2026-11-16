@@ -2,7 +2,10 @@ name: Daily RS new-high scan
 
 on:
   schedule:
+    # Primary run: after the US cash-market close (UTC).
     - cron: "17 22 * * 1-5"
+    # Backup run: catches a missed/delayed primary schedule and retries transient failures.
+    - cron: "17 23 * * 1-5"
   workflow_dispatch:
   push:
     branches: [main]
@@ -16,6 +19,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  issues: write
 
 concurrency:
   group: daily-rs-new-high-scan
@@ -43,8 +47,21 @@ jobs:
       - name: Run regression tests
         run: python -m pytest -q
 
-      - name: Run RS scan
-        run: python -u rs_new_high_scan.py
+      - name: Run RS scan with automatic retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "RS scan attempt ${attempt}/3"
+            if python -u rs_new_high_scan.py; then
+              exit 0
+            fi
+            if [ "${attempt}" -lt 3 ]; then
+              sleep $((attempt * 60))
+            fi
+          done
+          echo "RS scan failed after 3 attempts."
+          exit 1
 
       - name: Commit CSV outputs
         run: |
@@ -53,7 +70,6 @@ jobs:
           git add outputs/rs_new_high_tickers.csv outputs/rs_new_high_details.csv outputs/history/
           if ! git diff --cached --quiet; then
             git commit -m "Update RS new-high scan $(date -u +%F)"
-            # Rebase if another dashboard or maintenance commit landed during the scan.
             git pull --rebase origin main
             git push
           else
@@ -102,3 +118,36 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  alert:
+    if: ${{ failure() }}
+    needs: [scan, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update a GitHub issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "RS dashboard data refresh failed";
+            const body = [
+              "The automated RS scan or GitHub Pages deployment failed.",
+              "",
+              "Please inspect the failed run:",
+              `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              "",
+              "The workflow includes three scan attempts and a second scheduled backup run. This issue is the alert that manual investigation is required if both recovery paths fail."
+            ].join("\n");
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", per_page: 100
+            });
+            const match = existing.data.find(issue => issue.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: match.number, body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body
+              });
+            }
