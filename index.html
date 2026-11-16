@@ -68,7 +68,7 @@ async function renderSectorChart(){
   const i=sectors.indexOf(s);return '<span class="legend-item"><i class="legend-swatch" style="background:'+SECTOR_COLORS[i%SECTOR_COLORS.length]+'"></i>'+esc(s)+'</span>';
  }).join('');
  const available=snapshots.filter(day=>!day.error);
- document.getElementById('chart-caption').textContent=activeLookback.toUpperCase()+' · '+(activeDollarVolume==='all'?'All liquidity': '
+ document.getElementById('chart-caption').textContent=activeLookback.toUpperCase()+' · '+(activeDollarVolume==='all'?'All liquidity':'
 }
 async function loadRows(url){const res=await fetch(url+'?v='+Date.now(),{cache:'no-store'});if(!res.ok)throw new Error('CSV unavailable: '+res.status);return parseCSV(await res.text())}
 async function loadSelectedHistory(){const selected=document.getElementById('history-date').value;const status=document.getElementById('status-date');try{if(!selected){allRows=currentRows;status.textContent=displayDate(historyManifest?.latest_date)}else{allRows=await loadRows('outputs/history/rs_new_high_details_'+selected+'.csv');status.textContent=displayDate(selected)}document.getElementById('total').textContent=rowsForLookback(allRows).length.toLocaleString();render();await renderSectorChart()}catch(e){status.textContent='Unavailable';}}
@@ -85,7 +85,7 @@ document.querySelectorAll('th[data-key]').forEach(th=>th.addEventListener('click
 document.getElementById('refresh').addEventListener('click',load);
 document.getElementById('history-date').addEventListener('change',loadSelectedHistory);
 document.getElementById('lookback').addEventListener('change',e=>{activeLookback=e.target.value;render();renderSectorChart()});
-document.getElementById('dollar-volume').addEventListener('change',e=>{activeDollarVolume=e.target.value;render()});
+document.getElementById('dollar-volume').addEventListener('change',e=>{activeDollarVolume=e.target.value;render();renderSectorChart()});
 document.getElementById('copy').addEventListener('click',async()=>{const value=filtered.map(r=>r.symbol).join(', ');try{await navigator.clipboard.writeText(value);document.getElementById('copy').textContent='Copied '+filtered.length}catch(e){alert(value||'No tickers to copy')}});
 document.getElementById('download').addEventListener('click',()=>{const header=['symbol','description','exchange','sector','float_shares_outstanding','breakout_date','sessions_ago','close','adr_pct','average_volume_10d','average_dollar_volume_30d','rs_ratio','prior_250d_rs_high','breakout_pct','signal_3m','signal_6m','signal_12m','breakout_date_3m','sessions_ago_3m','rs_ratio_3m','prior_rs_high_3m','breakout_pct_3m','breakout_date_6m','sessions_ago_6m','rs_ratio_6m','prior_rs_high_6m','breakout_pct_6m','breakout_date_12m','sessions_ago_12m','rs_ratio_12m','prior_rs_high_12m','breakout_pct_12m','weekly_signal','weekly_rs_date','weekly_signal_age_weeks','weekly_rs_ratio','weekly_prior_rs_high','weekly_rs_breakout_pct','weekly_price_high','weekly_price_vs_high_pct'];const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';const csv=[header.join(','),...filtered.map(r=>header.map(k=>quote(r[k])).join(','))].join('\n');const a=document.createElement('a');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.href=url;a.download='rs_new_high_details.csv';a.click();URL.revokeObjectURL(url)});
 load();
