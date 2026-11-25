@@ -125,11 +125,11 @@ jobs:
 
       - name: Deploy to GitHub Pages (attempt 2/3)
         id: deployment_attempt_2
-        if: steps.deployment_attempt_1.outcome == 'failure'
+        if: failure() && steps.deployment_attempt_1.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       - name: Wait before deployment retry 3
-        if: steps.deployment_attempt_2.outcome == 'failure'
+        if: failure() && steps.deployment_attempt_2.outcome == 'failure'
         run: sleep 90
 
       - name: Deploy to GitHub Pages (attempt 3/3)
